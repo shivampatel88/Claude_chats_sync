@@ -61,6 +61,8 @@
   let idleSyncTimer = null;
   const IDLE_SYNC_DELAY_MS = 5 * 60 * 1000; // 5 minutes of user inactivity
   const MIGRATION_DOUBLED_TITLES_V1 = 'migration_doubledTitles_v1';
+  // V2: re-run migration after deduplicate() was extended to title attr + span paths.
+  const MIGRATION_DOUBLED_TITLES_V2 = 'migration_doubledTitles_v2';
 
   let scrapeTimer = null;
   let syncTimer = null;
@@ -69,6 +71,7 @@
   let lastSnapshot = '';
   let lastSyncAt = 0;
   let lastDetectedEmail = null; // persisted email seed so first scrape uses real identity
+  let cookieDetectedEmail = null; // email extracted from auth-cookie JWT by background worker at init
   let warnedMissingAccount = false;
   let warnedStorageUnavailable = false;
   let stopped = false;
@@ -179,6 +182,18 @@
       }
       throw error;
     }
+  }
+
+  // Fix A: Ask the background worker to scan auth-cookie JWTs for the user's email.
+  // This gives us the real email before the user ever opens the account dropdown.
+  // Best-effort — returns null if the background is inactive or cookies contain no JWT.
+  async function tryGetEmailFromBackground() {
+    if (!hasStorageApi()) return null;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_EMAIL' });
+      if (response && response.ok && response.email) return response.email.toLowerCase();
+    } catch (_) { /* background may not be running yet */ }
+    return null;
   }
 
   async function syncRemove(keys) {
@@ -542,12 +557,22 @@
 
   // BUG-08 fix: two-pass approach — high-confidence selectors first, then broad scan.
   // BUG-07 fix: also check lastDetectedEmail as a seed so persisted email is used on reload.
+  // Fix A: cookieDetectedEmail is checked before display-name fallback so the real identity
+  //        is used from the very first scrape, even before the user opens the account menu.
   function detectAccountIdentity() {
     const email = detectAccountEmail();
     if (email) {
       return {
         email,
         displayName: accountLabelFromEmail(email)
+      };
+    }
+
+    // Fix A: cookie-extracted email — available immediately at page load without UI interaction.
+    if (cookieDetectedEmail) {
+      return {
+        email: cookieDetectedEmail,
+        displayName: accountLabelFromEmail(cookieDetectedEmail)
       };
     }
 
@@ -649,7 +674,12 @@
   // BUG-07 fix: also restore lastKnownEmail from storage so the first scrape uses real identity.
   async function initProfileLocalId() {
     try {
-      const data = await storageGet([STORAGE_KEYS.profileLocalId, 'lastKnownEmail', MIGRATION_DOUBLED_TITLES_V1]);
+      const data = await storageGet([
+        STORAGE_KEYS.profileLocalId,
+        'lastKnownEmail',
+        MIGRATION_DOUBLED_TITLES_V1,
+        MIGRATION_DOUBLED_TITLES_V2
+      ]);
       let id = data[STORAGE_KEYS.profileLocalId];
       if (!id) {
         // crypto.randomUUID() is available in MV3 content scripts — zero collision probability
@@ -660,10 +690,24 @@
       // Sanitise to alphanum only, then take first 16 chars as a short readable suffix.
       profileFallbackAccountId = `acc_pfl_${id.replace(/[^a-z0-9]/gi, '').slice(0, 16)}`;
 
-      // One-time title deduplication migration for already-stored doubled titles
+      // One-time title deduplication migration for already-stored doubled titles (original)
       if (!data[MIGRATION_DOUBLED_TITLES_V1]) {
         await migrateDoubledTitles();
         await storageSet({ [MIGRATION_DOUBLED_TITLES_V1]: true });
+      }
+
+      // V2: re-run now that deduplicate() covers title-attr and span-text paths too
+      if (!data[MIGRATION_DOUBLED_TITLES_V2]) {
+        await migrateDoubledTitles();
+        await storageSet({ [MIGRATION_DOUBLED_TITLES_V2]: true });
+      }
+
+      // Fix A: seed cookieDetectedEmail early so the first scrape uses the real email
+      // even before the user opens the Claude account dropdown.
+      const cookieEmail = await tryGetEmailFromBackground();
+      if (cookieEmail) {
+        cookieDetectedEmail = cookieEmail;
+        lastDetectedEmail = cookieEmail; // also seed the snapshot guard
       }
     } catch (_error) {
       // If storage is unavailable at init time, use a session-only ID so scraping can
@@ -860,29 +904,30 @@
       .map(item => item.link);
   }
 
-  // BUG-06 real fix: deduplicate() is applied to EVERY candidate, not just the raw fallback.
-  // Claude's aria-label itself can be a doubled string (React concatenates visual + tooltip labels).
+  // Fix C: deduplicate() now applied to ALL extraction paths.
+  // Claude's React renderer can inject doubled text into aria-label, the title attribute,
+  // span textContent, or raw textContent depending on version — cover every case.
   function getTitleFromLink(link) {
-    // 1. aria-label, deduplicated
+    // 1. aria-label
     const ariaLabel = link.getAttribute('aria-label');
     if (ariaLabel && ariaLabel.trim().length > 2) {
       return cleanTitle(deduplicate(ariaLabel));
     }
 
-    // 2. title attribute, not deduplicated
+    // 2. title attribute — now deduplicated
     const titleAttr = link.getAttribute('title');
     if (titleAttr && titleAttr.trim().length > 2) {
-      return cleanTitle(titleAttr);
+      return cleanTitle(deduplicate(titleAttr));
     }
 
-    // 3. first visible span:not([aria-hidden]), not deduplicated
+    // 3. first visible span:not([aria-hidden]) — now deduplicated
     const firstTextSpan = link.querySelector('span:not([aria-hidden])');
     if (firstTextSpan) {
       const text = firstTextSpan.textContent.trim();
-      if (text.length > 2) return cleanTitle(text);
+      if (text.length > 2) return cleanTitle(deduplicate(text));
     }
 
-    // 4. raw textContent, deduplicated
+    // 4. raw textContent
     const raw = (link.textContent || '').replace(/\s+/g, ' ').trim();
     return cleanTitle(deduplicate(raw));
   }
@@ -1068,6 +1113,19 @@
           accountId
         };
         delete existingChats[chat.storageId];
+      }
+
+      // Fix B: Formally tombstone the fallback account so mergeAccounts() cannot
+      // resurrect it from syncAccounts on the next sync pass.
+      // Without this, the ghost "Patel" account re-appears from sync after migration.
+      if (!localDeleted.includes(profileFallbackAccountId)) {
+        const updatedDeleted = [...localDeleted, profileFallbackAccountId];
+        await storageSet({ deletedAccountIds: updatedDeleted });
+        if (hasSyncApi()) {
+          try {
+            await chrome.runtime.sendMessage({ type: 'TOMBSTONE_ACCOUNT', accountId: profileFallbackAccountId });
+          } catch (_) { /* best-effort — local tombstone is sufficient */ }
+        }
       }
     }
 
