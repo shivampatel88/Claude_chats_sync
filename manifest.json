@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Claude Chat Tracker",
+  "version": "0.4.5",
+  "description": "Track and sync visible Claude.ai chats across your Chrome profiles.",
+  "permissions": ["storage", "cookies"],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://anthropic.com/*",
+    "https://auth.anthropic.com/*"
+  ],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["shared/shared.js", "content/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

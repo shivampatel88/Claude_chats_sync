@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Chat Tracker</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Claude Chats</h1>
+      <p class="status-line">
+        <svg class="sync-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 7h-4.6a6 6 0 0 0-10 2M4 17h4.6a6 6 0 0 0 10-2M20 7l-3-3M20 7l-3 3M4 17l3 3M4 17l3-3" />
+        </svg>
+        <span id="statusText">Loading...</span>
+      </p>
+      <!-- IMP-05: sync quota bar -->
+      <div id="quotaBar" class="quota-bar" style="display:none" title="">
+        <div id="quotaFill" class="quota-fill"></div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="currentAccountName" class="top-account-name">Detecting...</div>
+      <button id="clearBtn" class="icon-button" type="button" title="Clear tracked data" aria-label="Clear tracked data">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <label class="search">
+      <span class="sr-only">Search chats</span>
+      <input id="searchInput" type="search" placeholder="Search chats" autocomplete="off" autofocus>
+    </label>
+
+    <div id="searchSummary" class="search-summary"></div>
+    <section class="account-panel" aria-label="Accounts">
+      <div class="account-controls">
+        <label for="accountFilterSelect">Show</label>
+        <select id="accountFilterSelect"></select>
+        <button id="renameBtn" class="small-button" type="button">Rename</button>
+        <button id="deleteAccountBtn" class="small-button danger-button" type="button">Delete</button>
+      </div>
+      <!-- IMP-02: inline edit panel — replaces window.prompt() -->
+      <div id="inlineEditPanel" class="inline-edit-panel" style="display:none" role="dialog" aria-label="Edit account name">
+        <input type="text" id="inlineEditInput" class="inline-edit-input" placeholder="Account name" autocomplete="off">
+        <button id="inlineEditConfirm" class="small-button" type="button">Save</button>
+        <button id="inlineEditCancel" class="small-button" type="button">Cancel</button>
+      </div>
+    </section>
+    <section id="chatList" class="chat-list" aria-live="polite"></section>
+  </main>
+
+  <script src="../shared/shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
