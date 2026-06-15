@@ -64,6 +64,11 @@
   // V2: re-run migration after deduplicate() was extended to title attr + span paths.
   const MIGRATION_DOUBLED_TITLES_V2 = 'migration_doubledTitles_v2';
 
+  // API-based timestamp sync: fetch real conversation updatedAt from Claude's internal API.
+  const API_SYNC_INTERVAL_MS = 60 * 1000; // at most once per 60 s
+  let cachedOrgId = null;     // cached so we don't re-fetch /api/organizations every time
+  let lastApiSyncAt = 0;      // epoch ms of last successful API call
+
   let scrapeTimer = null;
   let syncTimer = null;
   let observer = null;
@@ -819,6 +824,115 @@
     }
   }
 
+  // ─── API-based real timestamp sync ───────────────────────────────────────────
+  // Content scripts run inside claude.ai, so fetch() automatically carries the
+  // user's session cookies — no extra permissions needed.
+
+  // Step 1: get (and cache) the user's organisation UUID.
+  async function fetchOrganizationId() {
+    if (cachedOrgId) return cachedOrgId;
+    try {
+      const res = await fetch('https://claude.ai/api/organizations', {
+        credentials: 'include',
+        headers: { Accept: 'application/json' }
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      // API returns an array of org objects; take the first active one.
+      const orgs = Array.isArray(data) ? data : (data.organizations || []);
+      const org = orgs.find(o => !o.is_default_org) || orgs[0];
+      if (org) cachedOrgId = org.uuid || org.id || null;
+    } catch (_) {}
+    return cachedOrgId;
+  }
+
+  // Step 2: fetch conversation list for the org, returning an array of
+  // { chatId, title, updatedAt } objects.  Returns null on any error.
+  async function fetchRecentChats() {
+    const orgId = await fetchOrganizationId();
+    if (!orgId) return null;
+    try {
+      // Fetch up to 100 conversations — covers the vast majority of users.
+      const res = await fetch(
+        `https://claude.ai/api/organizations/${orgId}/chat_conversations?limit=100`,
+        { credentials: 'include', headers: { Accept: 'application/json' } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      const convs = Array.isArray(data) ? data : (data.conversations || data.chat_conversations || []);
+      return convs.map(c => ({
+        chatId: c.uuid || c.id,
+        // Use API title only when it's non-empty; scraper may have a better deduped value.
+        apiTitle: (c.name || c.title || '').trim() || null,
+        updatedAt: c.updated_at ? new Date(c.updated_at).getTime() : null
+      })).filter(c => c.chatId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Step 3: merge server timestamps (and titles where the API is cleaner) into
+  // local storage without triggering a full re-scrape.
+  async function applyServerTimestamps(apiChats) {
+    if (!apiChats || apiChats.length === 0) return;
+    if (!hasStorageApi()) return;
+
+    const local = await storageGet([STORAGE_KEYS.accounts, STORAGE_KEYS.chats]);
+    const accounts = local[STORAGE_KEYS.accounts] || {};
+    const chats    = local[STORAGE_KEYS.chats]    || {};
+
+    // Build a lookup of chatId → api entry for O(1) access.
+    const apiMap = new Map(apiChats.map(c => [c.chatId, c]));
+    let dirty = false;
+
+    for (const chat of Object.values(chats)) {
+      const api = apiMap.get(chat.chatId);
+      if (!api) continue;
+
+      let changed = false;
+
+      // Always prefer the server updatedAt — it is the authoritative conversation date.
+      if (api.updatedAt && api.updatedAt !== chat.serverUpdatedAt) {
+        chat.serverUpdatedAt = api.updatedAt;
+        changed = true;
+      }
+
+      // Use API title only if our stored title looks doubled (dedup heuristic) or is blank.
+      // The API title is the clean canonical name Claude's backend recorded.
+      if (api.apiTitle) {
+        const stored = (chat.title || '').trim();
+        const isDuplicated = stored.length > 10 &&
+          stored.slice(0, Math.floor(stored.length / 2)) === stored.slice(Math.floor(stored.length / 2));
+        if (!stored || isDuplicated) {
+          chat.title = api.apiTitle;
+          changed = true;
+        }
+      }
+
+      if (changed) dirty = true;
+    }
+
+    if (dirty) {
+      await storageSet({ chats });
+      // Update pending sync payload so the next flush includes fresh timestamps.
+      pendingSyncAccounts = accounts;
+      pendingSyncChats = chats;
+    }
+  }
+
+  // Throttled entry point: called from runFullScrape() on every scrape that produces
+  // a change.  The 60-second guard means we never hammer Claude's API.
+  function scheduleApiSync() {
+    if (stopped) return;
+    const elapsed = Date.now() - lastApiSyncAt;
+    if (elapsed < API_SYNC_INTERVAL_MS) return; // still within cooldown
+    lastApiSyncAt = Date.now();
+    fetchRecentChats().then(apiChats => {
+      if (!stopped && apiChats) applyServerTimestamps(apiChats);
+    }).catch(() => { /* best-effort — local data is never at risk */ });
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   function scheduleSync(accounts, chats) {
     if (!hasSyncApi()) return;
 
@@ -1159,10 +1273,11 @@
         firstSeen: existingChat.firstSeen || now,
         lastSeen: now,
         // Preserve the most recent non-null sectionTimestamp.
-        // Fresh scrapes assign it from the DOM; stale chats keep their last value.
         sectionTimestamp: chat.sectionTimestamp !== null
           ? chat.sectionTimestamp
-          : (existingChat.sectionTimestamp || null)
+          : (existingChat.sectionTimestamp || null),
+        // Preserve server-sourced timestamp — never overwrite with null from DOM scrape.
+        serverUpdatedAt: existingChat.serverUpdatedAt || null
       };
 
       if (!account.isFallback) {
@@ -1198,9 +1313,10 @@
     if (hasChanged) {
       await storageSet(storagePayload);
       // Phase 5: store pending sync payload; do NOT dispatch immediately.
-      // Sync is flushed by flushPendingSync() on tab-hide or user-idle.
       pendingSyncAccounts = accounts;
       pendingSyncChats = existingChats;
+      // Trigger an API-based timestamp refresh (throttled at 60s).
+      scheduleApiSync();
     }
   }
 

@@ -77,18 +77,34 @@ function syncRemove(keys) {
   return chrome.storage.sync.remove(keys);
 }
 
-function formatRelativeTime(timestamp) {
+// Render a chat timestamp in Claude's own display style:
+//   < 1 hour  : "11 minutes ago"
+//   < 24 hours: "3 hours ago"
+//   1–2 days  : "Yesterday"
+//   < 7 days  : "4 days ago"
+//   this year : "Jun 5"
+//   older     : "Jun 5, 2024"
+function formatChatDate(timestamp) {
   if (!timestamp) return 'unknown';
 
   const diff = Math.max(0, Date.now() - timestamp);
   const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
+  const hour   = 60 * minute;
+  const day    = 24 * hour;
 
-  if (diff < minute) return 'just now';
-  if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
-  if (diff < day) return `${Math.floor(diff / hour)}h ago`;
-  return `${Math.floor(diff / day)}d ago`;
+  if (diff < minute)      return 'just now';
+  if (diff < hour)        return `${Math.floor(diff / minute)} minutes ago`;
+  if (diff < 2 * hour)    return '1 hour ago';
+  if (diff < day)         return `${Math.floor(diff / hour)} hours ago`;
+  if (diff < 2 * day)     return 'Yesterday';
+  if (diff < 7 * day)     return `${Math.floor(diff / day)} days ago`;
+
+  const d = new Date(timestamp);
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return sameYear
+    ? `${months[d.getMonth()]} ${d.getDate()}`
+    : `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
 function shortAccountName(account) {
@@ -136,16 +152,15 @@ function hasSidebarOrder(chat) {
 // FLAW-04 fix: sidebarOrder older than 6 hours is considered stale.
 const SIDEBAR_ORDER_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-// Improved compareChats using sectionTimestamp as the primary date signal.
+// Improved compareChats using serverUpdatedAt as the primary date signal when available.
 // Priority:
-//   1. Starred chats always sort above non-starred (regardless of date or account)
-//   2. Same account + both have fresh sidebarOrder → use sidebar position (mirrors Claude exactly)
-//   3. sectionTimestamp (date bucket scraped from sidebar headers) or lastSeen as proxy
-//   4. Alphabetical title tiebreaker
-// This fixes the stale-vs-fresh bias where a 2-day-old chat with sidebarOrder:0 sorted
-// above a 1-minute-old chat whose orderSeenAt had expired.
+//   1. Starred chats always sort above non-starred
+//   2. Same account + both have fresh sidebarOrder → trust Claude's sidebar position exactly
+//   3. serverUpdatedAt (real conversation date from Claude API) when present
+//   4. sectionTimestamp (sidebar bucket) as fallback
+//   5. lastSeen (extension scrape time) as last resort
+//   6. Alphabetical title tiebreaker
 function compareChats(a, b) {
-  // Starred chats always sort to top; starred vs starred falls through to date logic below
   const aStarred = state.starredChatIds.has(a.storageId);
   const bStarred = state.starredChatIds.has(b.storageId);
   if (aStarred !== bStarred) return aStarred ? -1 : 1;
@@ -159,22 +174,16 @@ function compareChats(a, b) {
     return a.sidebarOrder - b.sidebarOrder;
   }
 
-  // Use sectionTimestamp when available. Fall back to lastSeen.
-  const aTime = a.sectionTimestamp || a.lastSeen || 0;
-  const bTime = b.sectionTimestamp || b.lastSeen || 0;
+  // Best available date signal: serverUpdatedAt > sectionTimestamp > lastSeen
+  const aTime = a.serverUpdatedAt || a.sectionTimestamp || a.lastSeen || 0;
+  const bTime = b.serverUpdatedAt || b.sectionTimestamp || b.lastSeen || 0;
   if (aTime !== bTime) return bTime - aTime;
 
-  // Same bucket/time tie-breakers:
-  // 1. If same account and both have fresh sidebar order, use sidebar order.
-  if (a.accountId === b.accountId && aFresh && bFresh) {
-    return a.sidebarOrder - b.sidebarOrder;
-  }
-  // 2. Then compare lastSeen descending.
-  const aLastSeen = a.lastSeen || 0;
-  const bLastSeen = b.lastSeen || 0;
-  if (aLastSeen !== bLastSeen) return bLastSeen - aLastSeen;
-
-  // 3. Then title ascending.
+  // Tiebreakers when dates are identical:
+  if (a.accountId === b.accountId && aFresh && bFresh) return a.sidebarOrder - b.sidebarOrder;
+  const aLast = a.lastSeen || 0;
+  const bLast = b.lastSeen || 0;
+  if (aLast !== bLast) return bLast - aLast;
   return (a.title || '').localeCompare(b.title || '');
 }
 
@@ -467,7 +476,9 @@ function makeChatItem(chat) {
 
   const accountName = document.createElement('span');
   accountName.className = 'account-name';
-  accountName.textContent = `${shortAccountName(account)} - ${formatRelativeTime(chat.lastSeen)}`;
+  // Use the best available date: real server timestamp > section bucket > scrape time
+  const displayTs = chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
+  accountName.textContent = `${shortAccountName(account)} · ${formatChatDate(displayTs)}`;
 
   const badge = document.createElement('span');
   badge.className = 'status-badge';

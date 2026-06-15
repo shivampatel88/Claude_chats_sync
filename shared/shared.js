@@ -11,7 +11,8 @@ function compactChat(chat) {
     l: chat.lastSeen,
     o: chat.sidebarOrder,
     os: chat.orderSeenAt,
-    st: chat.sectionTimestamp || undefined
+    st: chat.sectionTimestamp || undefined,
+    su: chat.serverUpdatedAt || undefined
   };
 }
 
@@ -28,7 +29,8 @@ function expandChat(chat) {
     lastSeen: chat.l,
     sidebarOrder: chat.o,
     orderSeenAt: chat.os,
-    sectionTimestamp: chat.st || null
+    sectionTimestamp: chat.st || null,
+    serverUpdatedAt: chat.su || null
   };
 }
 
