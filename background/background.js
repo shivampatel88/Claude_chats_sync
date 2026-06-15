@@ -120,20 +120,32 @@ async function readSyncedData() {
 let syncInProgress = false;
 const syncQueue = [];
 
+// Structured logging for the background service worker (visible in chrome://extensions → service worker)
+const BGT = '[CCT-BG]';
+const bgLog  = (...a) => console.log  (BGT, ...a);
+const bgWarn = (...a) => console.warn (BGT, ...a);
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // Fix A: GET_ACCOUNT_EMAIL — scan auth-cookie JWTs and return the user's email.
   if (message.type === 'GET_ACCOUNT_EMAIL') {
+    bgLog('🍪 GET_ACCOUNT_EMAIL: scanning cookies…');
     extractEmailFromCookies().then(
-      email => sendResponse({ ok: true, email }),
-      ()    => sendResponse({ ok: false, email: null })
+      email => {
+        bgLog(email ? `🍪 Email found: ${email}` : '🍪 No JWT email in cookies');
+        sendResponse({ ok: true, email });
+      },
+      (err) => {
+        bgWarn('🍪 Cookie scan error:', err);
+        sendResponse({ ok: false, email: null });
+      }
     );
     return true;
   }
 
-  // Fix B: TOMBSTONE_ACCOUNT — add a fallback account to syncDeletedAccounts so
-  // mergeAccounts() treats it as deleted and never resurfaces the ghost account.
+  // Fix B: TOMBSTONE_ACCOUNT
   if (message.type === 'TOMBSTONE_ACCOUNT') {
     const { accountId } = message;
+    bgLog('🪦 TOMBSTONE_ACCOUNT:', accountId);
     (async () => {
       try {
         const data = await chrome.storage.sync.get([SYNC_KEYS.deletedAccounts]);
@@ -141,19 +153,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (!deletedAccounts[accountId]) {
           deletedAccounts[accountId] = { accountId, deletedAt: Date.now(), auto: true };
           await chrome.storage.sync.set({ [SYNC_KEYS.deletedAccounts]: deletedAccounts });
+          bgLog('🪦 Tombstone written to sync for', accountId);
+        } else {
+          bgLog('🪦 Tombstone already exists for', accountId);
         }
         sendResponse({ ok: true });
       } catch (err) {
+        bgWarn('🪦 TOMBSTONE_ACCOUNT error:', err);
         sendResponse({ ok: false });
       }
     })();
     return true;
   }
 
-  // Phase 1: Tombstone resurrection — remove a previously deleted account from sync
-  // so the background worker no longer garbage-collects it on the next SYNC_DATA pass.
+  // Phase 1: Tombstone resurrection
   if (message.type === 'RESURRECT_ACCOUNT') {
     const { accountId } = message;
+    bgLog('🌱 RESURRECT_ACCOUNT:', accountId);
     (async () => {
       try {
         const data = await chrome.storage.sync.get([SYNC_KEYS.deletedAccounts]);
@@ -161,17 +177,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (deletedAccounts[accountId]) {
           delete deletedAccounts[accountId];
           await chrome.storage.sync.set({ [SYNC_KEYS.deletedAccounts]: deletedAccounts });
+          bgLog('🌱 Tombstone removed from sync for', accountId);
+        } else {
+          bgLog('🌱 No tombstone found for', accountId, '— nothing to remove');
         }
         sendResponse({ ok: true });
       } catch (err) {
+        bgWarn('🌱 RESURRECT_ACCOUNT error:', err);
         sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
       }
     })();
-    return true; // keep sendResponse alive
+    return true;
   }
 
   if (message.type !== 'SYNC_DATA') return false;
-  // Push onto queue — processQueue() will run the latest and discard the rest
+  bgLog(`🔄 SYNC_DATA queued (queue depth: ${syncQueue.length + 1})`);
   syncQueue.push({
     accounts: message.accounts,
     chats: message.chats,
@@ -179,39 +199,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     resolve: sendResponse
   });
   processQueue();
-  return true; // keep sendResponse alive (async)
+  return true;
 });
 
 async function processQueue() {
   if (syncInProgress || syncQueue.length === 0) return;
   syncInProgress = true;
 
-  // Copy all queued items into batch
   const batch = [...syncQueue];
-  // Clear syncQueue
   syncQueue.length = 0;
+  bgLog(`🔄 processQueue: processing ${batch.length} item(s)`);
 
   try {
-    // Read existing synced data
     const synced = await readSyncedData();
     let currentAccounts = { ...synced.accounts };
-    let currentChats = { ...synced.chats };
-    let currentDeleted = { ...synced.deletedAccounts };
+    let currentChats    = { ...synced.chats };
+    let currentDeleted  = { ...synced.deletedAccounts };
 
-    // Merge existing synced accounts/chats/deleted with every batch item
     for (const item of batch) {
-      currentDeleted = mergeDeletedAccounts(currentDeleted, item.deletedAccounts);
+      currentDeleted  = mergeDeletedAccounts(currentDeleted, item.deletedAccounts);
       currentAccounts = mergeAccounts(currentAccounts, item.accounts, currentDeleted);
-      currentChats = mergeChats(currentChats, item.chats, currentDeleted);
+      currentChats    = mergeChats(currentChats, item.chats, currentDeleted);
     }
 
-    // Run tombstone retention garbage collection
     currentDeleted = gcTombstones(currentDeleted, currentAccounts, currentChats);
 
-    // Write the merged result
     const prunedCount = await doSyncWrite(currentAccounts, currentChats, currentDeleted);
+    bgLog(`🔄 processQueue done — accounts: ${Object.keys(currentAccounts).length}, chats: ${Object.keys(currentChats).length}, pruned: ${prunedCount}`);
 
-    // Send response to every queued request
     for (const item of batch) {
       if (typeof item.resolve === 'function') {
         item.resolve({ ok: true, prunedCount, cutoffDays: 90 });
@@ -219,7 +234,7 @@ async function processQueue() {
     }
   } catch (err) {
     const errMsg = err && err.message ? err.message : String(err);
-    // If any error happens, send { ok: false, error } to every queued request
+    bgWarn('🔄 processQueue error:', errMsg);
     for (const item of batch) {
       if (typeof item.resolve === 'function') {
         item.resolve({ ok: false, error: errMsg });
@@ -227,7 +242,6 @@ async function processQueue() {
     }
   } finally {
     syncInProgress = false;
-    // Process any request that arrived while we were writing
     processQueue();
   }
 }

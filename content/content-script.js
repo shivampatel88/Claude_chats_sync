@@ -1,31 +1,31 @@
 (function () {
-  'use strict';
+  "use strict";
 
   const STORAGE_KEYS = {
-    accounts: 'accounts',
-    chats: 'chats',
-    currentAccountId: 'currentAccountId',
-    syncStatus: 'syncStatus',
-    pendingOpen: 'pendingOpen',
-    profileLocalId: 'profileLocalId'
+    accounts: "accounts",
+    chats: "chats",
+    currentAccountId: "currentAccountId",
+    syncStatus: "syncStatus",
+    pendingOpen: "pendingOpen",
+    profileLocalId: "profileLocalId",
   };
 
   const SYNC_KEYS = {
-    accounts: 'syncAccounts',
-    meta: 'syncMeta',
-    chatPrefix: 'syncChats_',
-    deletedAccounts: 'syncDeletedAccounts'
+    accounts: "syncAccounts",
+    meta: "syncMeta",
+    chatPrefix: "syncChats_",
+    deletedAccounts: "syncDeletedAccounts",
   };
 
   const ACCOUNT_COLORS = [
-    '#4A90D9',
-    '#D9784A',
-    '#45A878',
-    '#8D66CC',
-    '#C9A227',
-    '#2D9BA3',
-    '#C85C7A',
-    '#789A45'
+    "#4A90D9",
+    "#D9784A",
+    "#45A878",
+    "#8D66CC",
+    "#C9A227",
+    "#2D9BA3",
+    "#C85C7A",
+    "#789A45",
   ];
 
   const ACCOUNT_SELECTORS = [
@@ -36,10 +36,10 @@
     '[aria-label*="@"]',
     'button[aria-label*="account" i]',
     'button[aria-label*="profile" i]',
-    'nav',
-    'aside',
+    "nav",
+    "aside",
     '[role="navigation"]',
-    'header'
+    "header",
   ];
 
   const CHAT_LINK_SELECTOR = 'a[href*="/chat/"]';
@@ -48,7 +48,7 @@
   const SCRAPE_DEBOUNCE_MS = 1200;
   const INITIAL_RETRY_DELAYS = [800, 1800, 3500, 6000, 12000, 20000];
   // Fallback display name shown when Claude does not expose an email address
-  const FALLBACK_ACCOUNT_NAME = 'Current Claude account';
+  const FALLBACK_ACCOUNT_NAME = "Current Claude account";
 
   // Set during init to a value unique per Chrome profile — never shared across profiles
   let profileFallbackAccountId = null;
@@ -60,20 +60,20 @@
   let pendingSyncChats = null;
   let idleSyncTimer = null;
   const IDLE_SYNC_DELAY_MS = 5 * 60 * 1000; // 5 minutes of user inactivity
-  const MIGRATION_DOUBLED_TITLES_V1 = 'migration_doubledTitles_v1';
+  const MIGRATION_DOUBLED_TITLES_V1 = "migration_doubledTitles_v1";
   // V2: re-run migration after deduplicate() was extended to title attr + span paths.
-  const MIGRATION_DOUBLED_TITLES_V2 = 'migration_doubledTitles_v2';
+  const MIGRATION_DOUBLED_TITLES_V2 = "migration_doubledTitles_v2";
 
   // API-based timestamp sync: fetch real conversation updatedAt from Claude's internal API.
   const API_SYNC_INTERVAL_MS = 60 * 1000; // at most once per 60 s
-  let cachedOrgId = null;     // cached so we don't re-fetch /api/organizations every time
-  let lastApiSyncAt = 0;      // epoch ms of last successful API call
+  let cachedOrgId = null; // cached so we don't re-fetch /api/organizations every time
+  let lastApiSyncAt = 0; // epoch ms of last successful API call
 
   let scrapeTimer = null;
   let syncTimer = null;
   let observer = null;
   let accountObserver = null;
-  let lastSnapshot = '';
+  let lastSnapshot = "";
   let lastSyncAt = 0;
   let lastDetectedEmail = null; // persisted email seed so first scrape uses real identity
   let cookieDetectedEmail = null; // email extracted from auth-cookie JWT by background worker at init
@@ -85,8 +85,19 @@
   let pendingNavigationScheduled = false; // true while the redirect/logout timer is pending on the landing page
   let googleStartTimer = null;
 
+  // ─── Structured debug logging ──────────────────────────────────────────────────
+  const CCT = "[CCT]";
+  const cctLog = (...a) => console.log(CCT, ...a);
+  const cctWarn = (...a) => console.warn(CCT, ...a);
+  const cctError = (...a) => console.error(CCT, ...a);
+  const cctGroup = (label) => console.group(`${CCT} ${label}`);
+  const cctGroupEnd = () => console.groupEnd();
+  // ────────────────────────────────────────────────────────────
+
   function isExtensionContextInvalidated(error) {
-    return /extension context invalidated/i.test(String(error && (error.message || error)));
+    return /extension context invalidated/i.test(
+      String(error && (error.message || error)),
+    );
   }
 
   function stopTracking() {
@@ -109,14 +120,16 @@
 
   function hasStorageApi() {
     try {
-      return !stopped
-        && typeof chrome !== 'undefined'
-        && chrome.runtime
-        && chrome.runtime.id
-        && chrome.storage
-        && chrome.storage.local
-        && typeof chrome.storage.local.get === 'function'
-        && typeof chrome.storage.local.set === 'function';
+      return (
+        !stopped &&
+        typeof chrome !== "undefined" &&
+        chrome.runtime &&
+        chrome.runtime.id &&
+        chrome.storage &&
+        chrome.storage.local &&
+        typeof chrome.storage.local.get === "function" &&
+        typeof chrome.storage.local.set === "function"
+      );
     } catch (_error) {
       return false;
     }
@@ -124,14 +137,16 @@
 
   function hasSyncApi() {
     try {
-      return !stopped
-        && typeof chrome !== 'undefined'
-        && chrome.runtime
-        && chrome.runtime.id
-        && chrome.storage
-        && chrome.storage.sync
-        && typeof chrome.storage.sync.get === 'function'
-        && typeof chrome.storage.sync.set === 'function';
+      return (
+        !stopped &&
+        typeof chrome !== "undefined" &&
+        chrome.runtime &&
+        chrome.runtime.id &&
+        chrome.storage &&
+        chrome.storage.sync &&
+        typeof chrome.storage.sync.get === "function" &&
+        typeof chrome.storage.sync.set === "function"
+      );
     } catch (_error) {
       return false;
     }
@@ -189,18 +204,6 @@
     }
   }
 
-  // Fix A: Ask the background worker to scan auth-cookie JWTs for the user's email.
-  // This gives us the real email before the user ever opens the account dropdown.
-  // Best-effort — returns null if the background is inactive or cookies contain no JWT.
-  async function tryGetEmailFromBackground() {
-    if (!hasStorageApi()) return null;
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_EMAIL' });
-      if (response && response.ok && response.email) return response.email.toLowerCase();
-    } catch (_) { /* background may not be running yet */ }
-    return null;
-  }
-
   async function syncRemove(keys) {
     if (!hasSyncApi()) return;
     try {
@@ -215,7 +218,9 @@
   }
 
   function textOf(element) {
-    return (element && element.textContent ? element.textContent : '').replace(/\s+/g, ' ').trim();
+    return (element && element.textContent ? element.textContent : "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function removePendingToast() {
@@ -256,44 +261,52 @@
   }
 
   function isLoginPage() {
-    return location.pathname.startsWith('/login');
+    return location.pathname.startsWith("/login");
   }
 
   function isPostLoginLandingPage() {
-    return location.pathname === '/'
-      || location.pathname === '/new';
+    return location.pathname === "/" || location.pathname === "/new";
   }
 
   function shouldHandlePendingOpenHere(pendingOpen) {
     // isPendingFlowUrl (ctt param) was removed: Google OAuth strips all custom query params,
     // so the ctt value can never be verified after the OAuth redirect.
-    return isLoginPage()
-      || isPostLoginLandingPage()
-      || sameClaudeChatUrl(location.href, pendingOpen.chatUrl);
+    return (
+      isLoginPage() ||
+      isPostLoginLandingPage() ||
+      sameClaudeChatUrl(location.href, pendingOpen.chatUrl)
+    );
   }
 
   // Finds the "Continue with Google" (or equivalent) button on Claude's login page.
   // Handles text-based, aria-label-based, and image/SVG-based Google buttons.
   // BUG-04 fix: removed the text.length === 0 fallback that matched any icon-only button.
   function findGoogleSignInElement() {
-    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-    return candidates.find(element => {
-      const aria = (element.getAttribute('aria-label') || '').toLowerCase();
+    const candidates = Array.from(
+      document.querySelectorAll('button, a, [role="button"]'),
+    );
+    return candidates.find((element) => {
+      const aria = (element.getAttribute("aria-label") || "").toLowerCase();
       // Rule 1: If aria-label contains google, match it.
-      if (aria.includes('google')) {
+      if (aria.includes("google")) {
         return true;
       }
 
       // Rule 2: If a child image alt or src contains google, match it.
-      const hasChildImgGoogle = Boolean(element.querySelector('img[src*="google" i], img[alt*="google" i]'));
+      const hasChildImgGoogle = Boolean(
+        element.querySelector('img[src*="google" i], img[alt*="google" i]'),
+      );
       if (hasChildImgGoogle) {
         return true;
       }
 
       // Rule 3: If only visible text contains google, also require one action word
       const text = textOf(element).toLowerCase();
-      if (text.includes('google')) {
-        const hasActionWord = text.includes('continue') || text.includes('sign') || text.includes('log');
+      if (text.includes("google")) {
+        const hasActionWord =
+          text.includes("continue") ||
+          text.includes("sign") ||
+          text.includes("log");
         if (hasActionWord) {
           return true;
         }
@@ -322,8 +335,12 @@
         attempts += 1;
         if (attempts >= maxAttempts) {
           // Could not find Google button — ask user to click manually
-          const detailEl = document.querySelector('#claude-chat-tracker-toast [style*="color:#b8b0a7"]');
-          if (detailEl) detailEl.textContent = 'Could not find Google button — click "Continue with Google" manually';
+          const detailEl = document.querySelector(
+            '#claude-chat-tracker-toast [style*="color:#b8b0a7"]',
+          );
+          if (detailEl)
+            detailEl.textContent =
+              'Could not find Google button — click "Continue with Google" manually';
           return;
         }
         googleStartTimer = window.setTimeout(tryClick, 500);
@@ -335,7 +352,7 @@
       await setPendingOpen({
         ...pendingOpen,
         googleStarted: true,
-        loginStartedAt: Date.now()
+        loginStartedAt: Date.now(),
       });
       button.click();
     };
@@ -346,53 +363,56 @@
   function makePendingToast(pendingOpen) {
     removePendingToast();
 
-    const toast = document.createElement('div');
-    toast.id = 'claude-chat-tracker-toast';
+    const toast = document.createElement("div");
+    toast.id = "claude-chat-tracker-toast";
     toast.style.cssText = [
-      'position:fixed',
-      'top:14px',
-      'left:50%',
-      'transform:translateX(-50%)',
-      'z-index:2147483647',
-      'width:min(720px,calc(100vw - 32px))',
-      'background:#191817',
-      'color:#f4f1ea',
-      'border:1px solid #d97945',
-      'border-radius:10px',
-      'box-shadow:0 16px 44px rgba(0,0,0,.42)',
-      'padding:12px 14px',
+      "position:fixed",
+      "top:14px",
+      "left:50%",
+      "transform:translateX(-50%)",
+      "z-index:2147483647",
+      "width:min(720px,calc(100vw - 32px))",
+      "background:#191817",
+      "color:#f4f1ea",
+      "border:1px solid #d97945",
+      "border-radius:10px",
+      "box-shadow:0 16px 44px rgba(0,0,0,.42)",
+      "padding:12px 14px",
       'font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
-      'display:grid',
-      'grid-template-columns:minmax(0,1fr) auto auto',
-      'gap:10px',
-      'align-items:center'
-    ].join(';');
+      "display:grid",
+      "grid-template-columns:minmax(0,1fr) auto auto",
+      "gap:10px",
+      "align-items:center",
+    ].join(";");
 
-    const message = document.createElement('div');
-    message.style.minWidth = '0';
+    const message = document.createElement("div");
+    message.style.minWidth = "0";
 
-    const title = document.createElement('div');
+    const title = document.createElement("div");
     title.textContent = `Switch to "${pendingOpen.accountName}" — logging in…`;
-    title.style.cssText = 'font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    title.style.cssText =
+      "font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
 
-    const detail = document.createElement('div');
+    const detail = document.createElement("div");
     detail.textContent = isLoginPage()
       ? `Select "${pendingOpen.accountName}" on the Google screen. Target: ${pendingOpen.chatTitle}`
       : `Opening: ${pendingOpen.chatTitle}`;
-    detail.style.cssText = 'color:#b8b0a7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px';
+    detail.style.cssText =
+      "color:#b8b0a7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px";
 
-    const openButton = document.createElement('button');
-    openButton.type = 'button';
-    openButton.textContent = isLoginPage() ? 'Start login' : 'Open now';
-    openButton.style.cssText = 'height:30px;border:1px solid #6d5a4b;border-radius:8px;background:#2a2420;color:#f4f1ea;padding:0 10px;cursor:pointer;font:inherit;font-size:12px';
-    openButton.addEventListener('click', async () => {
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.textContent = isLoginPage() ? "Start login" : "Open now";
+    openButton.style.cssText =
+      "height:30px;border:1px solid #6d5a4b;border-radius:8px;background:#2a2420;color:#f4f1ea;padding:0 10px;cursor:pointer;font:inherit;font-size:12px";
+    openButton.addEventListener("click", async () => {
       if (isLoginPage()) {
         const button = findGoogleSignInElement();
         if (button) {
           await setPendingOpen({
             ...pendingOpen,
             googleStarted: true,
-            loginStartedAt: Date.now()
+            loginStartedAt: Date.now(),
           });
           button.click();
           return;
@@ -401,11 +421,12 @@
       location.assign(pendingOpen.chatUrl);
     });
 
-    const dismissButton = document.createElement('button');
-    dismissButton.type = 'button';
-    dismissButton.textContent = 'Dismiss';
-    dismissButton.style.cssText = 'height:30px;border:1px solid #37352f;border-radius:8px;background:#1d1d1c;color:#b8b0a7;padding:0 10px;cursor:pointer;font:inherit;font-size:12px';
-    dismissButton.addEventListener('click', () => {
+    const dismissButton = document.createElement("button");
+    dismissButton.type = "button";
+    dismissButton.textContent = "Dismiss";
+    dismissButton.style.cssText =
+      "height:30px;border:1px solid #37352f;border-radius:8px;background:#1d1d1c;color:#b8b0a7;padding:0 10px;cursor:pointer;font:inherit;font-size:12px";
+    dismissButton.addEventListener("click", () => {
       clearPendingOpen();
     });
 
@@ -466,8 +487,9 @@
   function findEmailInElement(element) {
     if (!element) return null;
 
-    const ariaLabel = element.getAttribute && element.getAttribute('aria-label');
-    const title = element.getAttribute && element.getAttribute('title');
+    const ariaLabel =
+      element.getAttribute && element.getAttribute("aria-label");
+    const title = element.getAttribute && element.getAttribute("title");
     const candidates = [ariaLabel, title, textOf(element)].filter(Boolean);
 
     for (const candidate of candidates) {
@@ -491,7 +513,7 @@
   }
 
   function cleanAccountDisplayName(value) {
-    const raw = value || '';
+    const raw = value || "";
     const emailMatch = raw.match(EMAIL_RE);
     if (emailMatch) return accountLabelFromEmail(emailMatch[0].toLowerCase());
 
@@ -499,42 +521,59 @@
     // Strip trailing comma-separated UI label fragments before processing.
     // e.g. "shivam patel, Settings" → "shivam patel"
     const UI_SUFFIXES = [
-      'settings', 'help', 'upgrade', 'free plan', 'profile',
-      'account', 'customize', 'sign out', 'log out', 'logout'
+      "settings",
+      "help",
+      "upgrade",
+      "free plan",
+      "profile",
+      "account",
+      "customize",
+      "sign out",
+      "log out",
+      "logout",
     ];
 
     // Pre-process: if the value contains ", SuffixWord" at the end, strip it
     let cleaned = raw;
     for (const suffix of UI_SUFFIXES) {
-      const pattern = new RegExp(`,\\s*${suffix}\\s*$`, 'i');
-      cleaned = cleaned.replace(pattern, '');
+      const pattern = new RegExp(`,\\s*${suffix}\\s*$`, "i");
+      cleaned = cleaned.replace(pattern, "");
     }
 
     const blocked = [
-      'claude',
-      'new chat',
-      'search',
-      'chats',
-      'projects',
-      'artifacts',
-      'code',
-      'customize',
-      'free plan',
-      'upgrade',
-      'settings',
-      'help'
+      "claude",
+      "new chat",
+      "search",
+      "chats",
+      "projects",
+      "artifacts",
+      "code",
+      "customize",
+      "free plan",
+      "upgrade",
+      "settings",
+      "help",
     ];
 
     const lines = cleaned
       .split(/\n| {2,}/)
-      .map(line => line.replace(/\s+/g, ' ').trim())
+      .map((line) => line.replace(/\s+/g, " ").trim())
       .filter(Boolean);
 
     for (const line of lines) {
       const lower = line.toLowerCase();
       if (line.length > 36) continue;
       if (blocked.includes(lower)) continue;
-      if (blocked.some(word => lower === word || lower.startsWith(`${word} `) || lower.endsWith(` ${word}`) || lower.endsWith(`, ${word}`))) continue;
+      if (
+        blocked.some(
+          (word) =>
+            lower === word ||
+            lower.startsWith(`${word} `) ||
+            lower.endsWith(` ${word}`) ||
+            lower.endsWith(`, ${word}`),
+        )
+      )
+        continue;
       if (/^\d+\s/.test(line)) continue;
       return line;
     }
@@ -546,10 +585,10 @@
     if (!element) return null;
 
     const candidates = [
-      element.getAttribute && element.getAttribute('aria-label'),
-      element.getAttribute && element.getAttribute('title'),
+      element.getAttribute && element.getAttribute("aria-label"),
+      element.getAttribute && element.getAttribute("title"),
       element.innerText,
-      textOf(element)
+      textOf(element),
     ].filter(Boolean);
 
     for (const candidate of candidates) {
@@ -567,9 +606,15 @@
   function detectAccountIdentity() {
     const email = detectAccountEmail();
     if (email) {
+      // Fix F (sticky): pin the email into cookieDetectedEmail the first time DOM exposes it.
+      // This ensures subsequent scrapes use the real identity even after the toggle closes.
+      if (!cookieDetectedEmail) {
+        cookieDetectedEmail = email;
+        cctLog("🔒 DOM email pinned for session:", email);
+      }
       return {
         email,
-        displayName: accountLabelFromEmail(email)
+        displayName: accountLabelFromEmail(email),
       };
     }
 
@@ -577,7 +622,7 @@
     if (cookieDetectedEmail) {
       return {
         email: cookieDetectedEmail,
-        displayName: accountLabelFromEmail(cookieDetectedEmail)
+        displayName: accountLabelFromEmail(cookieDetectedEmail),
       };
     }
 
@@ -586,11 +631,13 @@
       '[data-testid*="user"]',
       '[data-testid*="account"]',
       'button[aria-label*="account" i]',
-      'button[aria-label*="profile" i]'
+      'button[aria-label*="profile" i]',
     ];
 
     for (const selector of highConfidenceSelectors) {
-      const elements = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      const elements = Array.from(document.querySelectorAll(selector)).filter(
+        isVisible,
+      );
       for (const el of elements) {
         const displayName = findDisplayNameInElement(el);
         if (displayName) return { email: null, displayName };
@@ -599,9 +646,13 @@
 
     // Pass 2: broad scan of sidebar/nav/header buttons, sorted bottom-first
     // (Claude's account button is at bottom-left of the sidebar)
-    const broadCandidates = Array.from(document.querySelectorAll('aside button, nav button, header button'))
+    const broadCandidates = Array.from(
+      document.querySelectorAll("aside button, nav button, header button"),
+    )
       .filter(isVisible)
-      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+      .sort(
+        (a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top,
+      );
 
     for (const element of broadCandidates) {
       const displayName = findDisplayNameInElement(element);
@@ -610,23 +661,20 @@
 
     return {
       email: null,
-      displayName: FALLBACK_ACCOUNT_NAME
+      displayName: FALLBACK_ACCOUNT_NAME,
     };
   }
 
-
   async function hashValue(value) {
     const bytes = new TextEncoder().encode(value);
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(digest))
-      .map(byte => byte.toString(16).padStart(2, '0'))
-      .join('');
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
   }
 
-
-
   function accountLabelFromEmail(email) {
-    return email.split('@')[0] || email;
+    return email.split("@")[0] || email;
   }
 
   async function resolveAccountIdentity(accountIdentity) {
@@ -637,10 +685,11 @@
       return {
         accountId: profileFallbackAccountId,
         email: null,
-        displayName: accountIdentity && accountIdentity.displayName
-          ? accountIdentity.displayName
-          : FALLBACK_ACCOUNT_NAME,
-        isFallback: true
+        displayName:
+          accountIdentity && accountIdentity.displayName
+            ? accountIdentity.displayName
+            : FALLBACK_ACCOUNT_NAME,
+        isFallback: true,
       };
     }
 
@@ -648,8 +697,10 @@
     return {
       accountId: `acc_${accountHash.slice(0, 16)}`,
       email: accountIdentity.email,
-      displayName: accountIdentity.displayName || accountLabelFromEmail(accountIdentity.email),
-      isFallback: false
+      displayName:
+        accountIdentity.displayName ||
+        accountLabelFromEmail(accountIdentity.email),
+      isFallback: false,
     };
   }
 
@@ -662,14 +713,143 @@
       const { chats = {} } = await storageGet([STORAGE_KEYS.chats]);
       let dirty = false;
       for (const chat of Object.values(chats)) {
-        const fixed = deduplicate(chat.title || '');
-        if (fixed !== (chat.title || '')) {
+        const fixed = deduplicate(chat.title || "");
+        if (fixed !== (chat.title || "")) {
           chat.title = fixed;
           dirty = true;
         }
       }
       if (dirty) await storageSet({ chats });
-    } catch (_) { /* non-critical — silently skip if storage is unavailable */ }
+    } catch (_) {
+      /* non-critical — silently skip if storage is unavailable */
+    }
+  }
+
+  // Auto-trigger the profile dropdown to extract the email address without user interaction.
+  // Strategy:
+  //   1. Find the profile toggle button (bottom-left of sidebar).
+  //   2. Click it to open the menu — the email appears in the DOM within ~150 ms.
+  //   3. Poll for up to 1.5 s for an email to appear in the document.
+  //   4. Close the menu immediately by clicking the button again (or pressing Escape).
+  //   5. Pin the email into cookieDetectedEmail / lastDetectedEmail for the session.
+  //
+  // The open+close happens fast enough that users on a normal page load will never notice.
+  // Guard: only runs once per session (emailAutoDetectAttempted flag) and only when
+  // cookieDetectedEmail is still null after all other probes have failed.
+  let emailAutoDetectAttempted = false;
+
+  function findProfileButton() {
+    // High-confidence: look for the bottom-most visible button in aside/nav
+    // that carries a name/aria-label matching the user's display name or "open menu".
+    // Claude renders the account button at the bottom-left of the sidebar.
+    const selectors = [
+      'button[data-testid*="user"]',
+      'button[data-testid*="account"]',
+      'button[data-testid*="profile"]',
+      'button[aria-label*="account" i]',
+      'button[aria-label*="profile" i]',
+      'button[aria-haspopup="menu"]',
+      'button[aria-haspopup="true"]',
+    ];
+
+    for (const sel of selectors) {
+      const els = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+      if (els.length > 0) {
+        // Prefer the bottom-most one (account button is at the bottom of the sidebar)
+        return els.sort(
+          (a, b) =>
+            b.getBoundingClientRect().top - a.getBoundingClientRect().top,
+        )[0];
+      }
+    }
+
+    // Broad fallback: bottom-most visible button in aside/nav that is NOT a chat link
+    const candidates = Array.from(
+      document.querySelectorAll("aside button, nav button"),
+    )
+      .filter(isVisible)
+      .filter((el) => !el.closest('a[href*="/chat/"]'))
+      .sort(
+        (a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top,
+      );
+
+    return candidates[0] || null;
+  }
+
+  async function tryAutoDetectEmailViaDropdown() {
+    if (emailAutoDetectAttempted || cookieDetectedEmail) return;
+    emailAutoDetectAttempted = true;
+
+    // Wait for the sidebar to be present before trying
+    await new Promise((resolve) => {
+      if (document.querySelector("aside, nav")) return resolve();
+      const mo = new MutationObserver(() => {
+        if (document.querySelector("aside, nav")) {
+          mo.disconnect();
+          resolve();
+        }
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+      window.setTimeout(resolve, 5000); // give up after 5 s if sidebar never appears
+    });
+
+    const btn = findProfileButton();
+    if (!btn) {
+      cctLog("👤 Auto-detect: no profile button found — skipping");
+      return;
+    }
+
+    cctLog("👤 Auto-detect: clicking profile button to expose email…");
+    btn.click();
+
+    // Poll the DOM for up to 1500 ms for an email to appear
+    const email = await new Promise((resolve) => {
+      const deadline = Date.now() + 1500;
+      const poll = () => {
+        const found = detectAccountEmail();
+        if (found) return resolve(found);
+        if (Date.now() >= deadline) return resolve(null);
+        window.setTimeout(poll, 80);
+      };
+      poll();
+    });
+
+    // Close the menu: fire Escape on the button (focused element), then on document,
+    // then click the button again if aria-expanded is still true after a settle period.
+    btn.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((r) => window.setTimeout(r, 150));
+    if (btn.getAttribute("aria-expanded") === "true") {
+      btn.click();
+      await new Promise((r) => window.setTimeout(r, 80));
+    }
+    // Final fallback: click the document body to dismiss any remaining popover
+    if (btn.getAttribute("aria-expanded") === "true") {
+      document.body.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true }),
+      );
+    }
+
+    if (email) {
+      cookieDetectedEmail = email;
+      lastDetectedEmail = email;
+      cctLog("✅ Auto-detect: email captured from dropdown:", email);
+      lastSnapshot = ""; // force next scrape to use real identity
+    } else {
+      cctLog("👤 Auto-detect: dropdown opened but no email found in DOM");
+    }
   }
 
   // Reads or generates a stable, unique seed for this Chrome profile from local storage,
@@ -678,47 +858,46 @@
   // BUG-05 fix: use crypto.randomUUID() instead of Date.now() + Math.random() to avoid collisions.
   // BUG-07 fix: also restore lastKnownEmail from storage so the first scrape uses real identity.
   async function initProfileLocalId() {
+    cctGroup("🚀 Init — profile & email seed");
     try {
       const data = await storageGet([
         STORAGE_KEYS.profileLocalId,
-        'lastKnownEmail',
+        "lastKnownEmail",
         MIGRATION_DOUBLED_TITLES_V1,
-        MIGRATION_DOUBLED_TITLES_V2
+        MIGRATION_DOUBLED_TITLES_V2,
       ]);
       let id = data[STORAGE_KEYS.profileLocalId];
       if (!id) {
-        // crypto.randomUUID() is available in MV3 content scripts — zero collision probability
         id = `profile_${crypto.randomUUID()}`;
         await storageSet({ [STORAGE_KEYS.profileLocalId]: id });
+        cctLog("🆕 New profile seed generated:", id);
+      } else {
+        cctLog("🆔 Existing profile seed loaded:", id);
       }
-      // Derive a stable, unique fallback account ID from the per-profile seed.
-      // Sanitise to alphanum only, then take first 16 chars as a short readable suffix.
-      profileFallbackAccountId = `acc_pfl_${id.replace(/[^a-z0-9]/gi, '').slice(0, 16)}`;
+      profileFallbackAccountId = `acc_pfl_${id.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+      cctLog("🆔 Fallback account ID:", profileFallbackAccountId);
 
-      // One-time title deduplication migration for already-stored doubled titles (original)
       if (!data[MIGRATION_DOUBLED_TITLES_V1]) {
+        cctLog("🔧 Running title-dedup migration V1…");
         await migrateDoubledTitles();
         await storageSet({ [MIGRATION_DOUBLED_TITLES_V1]: true });
+        cctLog("✅ Migration V1 done");
       }
-
-      // V2: re-run now that deduplicate() covers title-attr and span-text paths too
       if (!data[MIGRATION_DOUBLED_TITLES_V2]) {
+        cctLog("🔧 Running title-dedup migration V2…");
         await migrateDoubledTitles();
         await storageSet({ [MIGRATION_DOUBLED_TITLES_V2]: true });
+        cctLog("✅ Migration V2 done");
       }
 
-      // Fix A: seed cookieDetectedEmail early so the first scrape uses the real email
-      // even before the user opens the Claude account dropdown.
-      const cookieEmail = await tryGetEmailFromBackground();
-      if (cookieEmail) {
-        cookieDetectedEmail = cookieEmail;
-        lastDetectedEmail = cookieEmail; // also seed the snapshot guard
-      }
+      // Silently click the profile button to expose the email in the DOM,
+      // then immediately close it. Runs async before the first scrape fires.
+      tryAutoDetectEmailViaDropdown();
     } catch (_error) {
-      // If storage is unavailable at init time, use a session-only ID so scraping can
-      // still proceed. It will not persist across page reloads, but it prevents cross-
-      // profile contamination for the current session.
+      cctError("❌ Init failed — using session-only fallback ID", _error);
       profileFallbackAccountId = `acc_pfl_${Date.now().toString(36)}`;
+    } finally {
+      cctGroupEnd();
     }
   }
 
@@ -728,12 +907,18 @@
   // Saves ~57 bytes per chat entry in chrome.storage.sync chunks.
   // st = sectionTimestamp: date-bucket timestamp scraped from Claude's sidebar section headers.
 
-
   async function readSyncedData() {
-    const syncHeader = await syncGet([SYNC_KEYS.accounts, SYNC_KEYS.meta, SYNC_KEYS.deletedAccounts]);
+    const syncHeader = await syncGet([
+      SYNC_KEYS.accounts,
+      SYNC_KEYS.meta,
+      SYNC_KEYS.deletedAccounts,
+    ]);
     const meta = syncHeader[SYNC_KEYS.meta] || {};
     const chunkCount = Number(meta.chatChunkCount || 0);
-    const chunkKeys = Array.from({ length: chunkCount }, (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`);
+    const chunkKeys = Array.from(
+      { length: chunkCount },
+      (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`,
+    );
     const chunkData = chunkKeys.length > 0 ? await syncGet(chunkKeys) : {};
     const chats = {};
 
@@ -749,11 +934,9 @@
       accounts: syncHeader[SYNC_KEYS.accounts] || {},
       chats,
       meta,
-      deletedAccounts: syncHeader[SYNC_KEYS.deletedAccounts] || {}
+      deletedAccounts: syncHeader[SYNC_KEYS.deletedAccounts] || {},
     };
   }
-
-
 
   // Deprecated after Phase 2: sync writes must go through the background service worker.
   async function writeSyncedData(accounts, chats, previousChunkCount) {
@@ -763,8 +946,8 @@
       [SYNC_KEYS.meta]: {
         chatChunkCount: chunks.length,
         updatedAt: Date.now(),
-        version: 2
-      }
+        version: 2,
+      },
     };
 
     chunks.forEach((chunk, index) => {
@@ -788,25 +971,32 @@
     try {
       const synced = await readSyncedData();
       const deletedAccounts = synced.deletedAccounts || {};
-      const accounts = mergeAccounts(synced.accounts, localAccounts, deletedAccounts);
+      const accounts = mergeAccounts(
+        synced.accounts,
+        localAccounts,
+        deletedAccounts,
+      );
       const chats = mergeChats(synced.chats, localChats, deletedAccounts);
       const response = await chrome.runtime.sendMessage({
-        type: 'SYNC_DATA',
+        type: "SYNC_DATA",
         accounts,
         chats,
-        deletedAccounts
+        deletedAccounts,
       });
       if (response && response.ok) {
-        const msg = (response.prunedCount > 0)
-          ? `Synced; ${response.prunedCount} older chats skipped from sync`
-          : 'Synced';
+        const msg =
+          response.prunedCount > 0
+            ? `Synced; ${response.prunedCount} older chats skipped from sync`
+            : "Synced";
         await storageSet({
           accounts,
           chats,
-          syncStatus: { ok: true, updatedAt: Date.now(), message: msg }
+          syncStatus: { ok: true, updatedAt: Date.now(), message: msg },
         });
       } else {
-        throw new Error(response && response.error ? response.error : 'Sync write failed');
+        throw new Error(
+          response && response.error ? response.error : "Sync write failed",
+        );
       }
     } catch (error) {
       if (isExtensionContextInvalidated(error)) {
@@ -817,10 +1007,10 @@
         syncStatus: {
           ok: false,
           updatedAt: Date.now(),
-          message: error && error.message ? error.message : String(error)
-        }
+          message: error && error.message ? error.message : String(error),
+        },
       });
-      console.warn('[Claude Chat Tracker] Sync failed. Local tracking still works.', error);
+      cctWarn("🔄 Sync failed. Local tracking still works.", error);
     }
   }
 
@@ -830,19 +1020,30 @@
 
   // Step 1: get (and cache) the user's organisation UUID.
   async function fetchOrganizationId() {
-    if (cachedOrgId) return cachedOrgId;
+    if (cachedOrgId) {
+      cctLog("📡 Org ID (cached):", cachedOrgId);
+      return cachedOrgId;
+    }
+    cctLog("📡 Fetching org ID from /api/organizations…");
     try {
-      const res = await fetch('https://claude.ai/api/organizations', {
-        credentials: 'include',
-        headers: { Accept: 'application/json' }
+      const res = await fetch("https://claude.ai/api/organizations", {
+        credentials: "include",
+        headers: { Accept: "application/json" },
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        cctWarn("📡 /api/organizations returned", res.status);
+        return null;
+      }
       const data = await res.json();
-      // API returns an array of org objects; take the first active one.
-      const orgs = Array.isArray(data) ? data : (data.organizations || []);
-      const org = orgs.find(o => !o.is_default_org) || orgs[0];
-      if (org) cachedOrgId = org.uuid || org.id || null;
-    } catch (_) {}
+      const orgs = Array.isArray(data) ? data : data.organizations || [];
+      const org = orgs.find((o) => !o.is_default_org) || orgs[0];
+      if (org) {
+        cachedOrgId = org.uuid || org.id || null;
+        cctLog("📡 Org ID resolved:", cachedOrgId);
+      }
+    } catch (err) {
+      cctWarn("📡 fetchOrganizationId error:", err.message || err);
+    }
     return cachedOrgId;
   }
 
@@ -851,22 +1052,31 @@
   async function fetchRecentChats() {
     const orgId = await fetchOrganizationId();
     if (!orgId) return null;
+    cctLog(`📡 Fetching conversations for org ${orgId}…`);
     try {
-      // Fetch up to 100 conversations — covers the vast majority of users.
       const res = await fetch(
         `https://claude.ai/api/organizations/${orgId}/chat_conversations?limit=100`,
-        { credentials: 'include', headers: { Accept: 'application/json' } }
+        { credentials: "include", headers: { Accept: "application/json" } },
       );
-      if (!res.ok) return null;
+      if (!res.ok) {
+        cctWarn("📡 chat_conversations returned", res.status);
+        return null;
+      }
       const data = await res.json();
-      const convs = Array.isArray(data) ? data : (data.conversations || data.chat_conversations || []);
-      return convs.map(c => ({
-        chatId: c.uuid || c.id,
-        // Use API title only when it's non-empty; scraper may have a better deduped value.
-        apiTitle: (c.name || c.title || '').trim() || null,
-        updatedAt: c.updated_at ? new Date(c.updated_at).getTime() : null
-      })).filter(c => c.chatId);
-    } catch (_) {
+      const convs = Array.isArray(data)
+        ? data
+        : data.conversations || data.chat_conversations || [];
+      const result = convs
+        .map((c) => ({
+          chatId: c.uuid || c.id,
+          apiTitle: (c.name || c.title || "").trim() || null,
+          updatedAt: c.updated_at ? new Date(c.updated_at).getTime() : null,
+        }))
+        .filter((c) => c.chatId);
+      cctLog(`📡 API returned ${result.length} conversation(s)`);
+      return result;
+    } catch (err) {
+      cctWarn("📡 fetchRecentChats error:", err.message || err);
       return null;
     }
   }
@@ -879,11 +1089,12 @@
 
     const local = await storageGet([STORAGE_KEYS.accounts, STORAGE_KEYS.chats]);
     const accounts = local[STORAGE_KEYS.accounts] || {};
-    const chats    = local[STORAGE_KEYS.chats]    || {};
+    const chats = local[STORAGE_KEYS.chats] || {};
 
-    // Build a lookup of chatId → api entry for O(1) access.
-    const apiMap = new Map(apiChats.map(c => [c.chatId, c]));
+    const apiMap = new Map(apiChats.map((c) => [c.chatId, c]));
     let dirty = false;
+    let timestampsUpdated = 0;
+    let titlesFixed = 0;
 
     for (const chat of Object.values(chats)) {
       const api = apiMap.get(chat.chatId);
@@ -891,32 +1102,40 @@
 
       let changed = false;
 
-      // Always prefer the server updatedAt — it is the authoritative conversation date.
       if (api.updatedAt && api.updatedAt !== chat.serverUpdatedAt) {
         chat.serverUpdatedAt = api.updatedAt;
         changed = true;
+        timestampsUpdated++;
       }
 
-      // Use API title only if our stored title looks doubled (dedup heuristic) or is blank.
-      // The API title is the clean canonical name Claude's backend recorded.
       if (api.apiTitle) {
-        const stored = (chat.title || '').trim();
-        const isDuplicated = stored.length > 10 &&
-          stored.slice(0, Math.floor(stored.length / 2)) === stored.slice(Math.floor(stored.length / 2));
+        const stored = (chat.title || "").trim();
+        const isDuplicated =
+          stored.length > 10 &&
+          stored.slice(0, Math.floor(stored.length / 2)) ===
+            stored.slice(Math.floor(stored.length / 2));
         if (!stored || isDuplicated) {
+          cctLog(`🔧 Title fixed via API: "${stored}" → "${api.apiTitle}"`);
           chat.title = api.apiTitle;
           changed = true;
+          titlesFixed++;
         }
       }
 
       if (changed) dirty = true;
     }
 
+    cctLog(
+      `💾 applyServerTimestamps: ${timestampsUpdated} timestamps updated, ${titlesFixed} titles fixed`,
+    );
+
     if (dirty) {
       await storageSet({ chats });
-      // Update pending sync payload so the next flush includes fresh timestamps.
       pendingSyncAccounts = accounts;
       pendingSyncChats = chats;
+      cctLog("💾 Local storage updated with server timestamps");
+    } else {
+      cctLog("💾 No changes — all timestamps already current");
     }
   }
 
@@ -925,11 +1144,26 @@
   function scheduleApiSync() {
     if (stopped) return;
     const elapsed = Date.now() - lastApiSyncAt;
-    if (elapsed < API_SYNC_INTERVAL_MS) return; // still within cooldown
+    if (elapsed < API_SYNC_INTERVAL_MS) {
+      cctLog(
+        `⏭️  API sync skipped — cooldown (${Math.round((API_SYNC_INTERVAL_MS - elapsed) / 1000)}s remaining)`,
+      );
+      return;
+    }
     lastApiSyncAt = Date.now();
-    fetchRecentChats().then(apiChats => {
-      if (!stopped && apiChats) applyServerTimestamps(apiChats);
-    }).catch(() => { /* best-effort — local data is never at risk */ });
+    cctLog("📡 API sync starting…");
+
+    fetchRecentChats()
+      .then((apiChats) => {
+        if (!stopped && apiChats) {
+          applyServerTimestamps(apiChats);
+        } else if (!apiChats) {
+          cctLog(
+            "📡 API sync returned no data — will retry on next scrape cycle",
+          );
+        }
+      })
+      .catch((err) => cctWarn("📡 API sync error:", err.message || err));
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -938,7 +1172,8 @@
 
     window.clearTimeout(syncTimer);
     const elapsed = Date.now() - lastSyncAt;
-    const delay = elapsed >= MIN_SYNC_INTERVAL_MS ? 0 : MIN_SYNC_INTERVAL_MS - elapsed;
+    const delay =
+      elapsed >= MIN_SYNC_INTERVAL_MS ? 0 : MIN_SYNC_INTERVAL_MS - elapsed;
 
     syncTimer = window.setTimeout(() => {
       lastSyncAt = Date.now();
@@ -954,14 +1189,14 @@
   function normalizeChatHref(href) {
     try {
       const url = new URL(href, location.origin);
-      if (url.hostname !== 'claude.ai') return null;
+      if (url.hostname !== "claude.ai") return null;
 
       const match = url.pathname.match(/\/chat\/([^/?#]+)/);
       if (!match) return null;
 
       return {
         chatId: decodeURIComponent(match[1]),
-        url: `https://claude.ai/chat/${match[1]}`
+        url: `https://claude.ai/chat/${match[1]}`,
       };
     } catch (_error) {
       return null;
@@ -969,8 +1204,8 @@
   }
 
   function cleanTitle(rawTitle) {
-    const title = (rawTitle || '').replace(/\s+/g, ' ').trim();
-    return title || 'Untitled Chat';
+    const title = (rawTitle || "").replace(/\s+/g, " ").trim();
+    return title || "Untitled Chat";
   }
 
   // BUG-06 real fix: detect and remove exact front-half duplication.
@@ -978,7 +1213,7 @@
   // so the doubled string is IN the aria-label itself — not just in textContent.
   // Applying this to every candidate makes the fix bulletproof regardless of source.
   function deduplicate(s) {
-    const t = (s || '').replace(/\s+/g, ' ').trim();
+    const t = (s || "").replace(/\s+/g, " ").trim();
     const h = Math.floor(t.length / 2);
     if (t.length > 10 && t.slice(0, h) === t.slice(h)) {
       return t.slice(0, h).trim();
@@ -991,31 +1226,37 @@
     if (rect.width < 1 || rect.height < 1) return false;
 
     const style = window.getComputedStyle(element);
-    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0"
+    );
   }
 
   function orderedChatLinks() {
-    const containers = Array.from(document.querySelectorAll(CHAT_CONTAINER_SELECTOR))
-      .filter(isVisible);
+    const containers = Array.from(
+      document.querySelectorAll(CHAT_CONTAINER_SELECTOR),
+    ).filter(isVisible);
 
-    const scopedLinks = containers.flatMap(container => {
+    const scopedLinks = containers.flatMap((container) => {
       return Array.from(container.querySelectorAll(CHAT_LINK_SELECTOR));
     });
 
-    const links = scopedLinks.length > 0
-      ? scopedLinks
-      : Array.from(document.querySelectorAll(CHAT_LINK_SELECTOR));
+    const links =
+      scopedLinks.length > 0
+        ? scopedLinks
+        : Array.from(document.querySelectorAll(CHAT_LINK_SELECTOR));
 
     return links
       .filter(isVisible)
-      .map(link => ({
+      .map((link) => ({
         link,
-        rect: link.getBoundingClientRect()
+        rect: link.getBoundingClientRect(),
       }))
       .sort((a, b) => {
-        return (a.rect.top - b.rect.top) || (a.rect.left - b.rect.left);
+        return a.rect.top - b.rect.top || a.rect.left - b.rect.left;
       })
-      .map(item => item.link);
+      .map((item) => item.link);
   }
 
   // Fix C: deduplicate() now applied to ALL extraction paths.
@@ -1023,26 +1264,26 @@
   // span textContent, or raw textContent depending on version — cover every case.
   function getTitleFromLink(link) {
     // 1. aria-label
-    const ariaLabel = link.getAttribute('aria-label');
+    const ariaLabel = link.getAttribute("aria-label");
     if (ariaLabel && ariaLabel.trim().length > 2) {
       return cleanTitle(deduplicate(ariaLabel));
     }
 
     // 2. title attribute — now deduplicated
-    const titleAttr = link.getAttribute('title');
+    const titleAttr = link.getAttribute("title");
     if (titleAttr && titleAttr.trim().length > 2) {
       return cleanTitle(deduplicate(titleAttr));
     }
 
     // 3. first visible span:not([aria-hidden]) — now deduplicated
-    const firstTextSpan = link.querySelector('span:not([aria-hidden])');
+    const firstTextSpan = link.querySelector("span:not([aria-hidden])");
     if (firstTextSpan) {
       const text = firstTextSpan.textContent.trim();
       if (text.length > 2) return cleanTitle(deduplicate(text));
     }
 
     // 4. raw textContent
-    const raw = (link.textContent || '').replace(/\s+/g, ' ').trim();
+    const raw = (link.textContent || "").replace(/\s+/g, " ").trim();
     return cleanTitle(deduplicate(raw));
   }
 
@@ -1055,13 +1296,15 @@
     const container = document.querySelector(CHAT_CONTAINER_SELECTOR);
     if (!container) return buckets;
 
-    for (const child of container.querySelectorAll('*')) {
-      const text = (child.textContent || '').replace(/\s+/g, ' ').trim();
+    for (const child of container.querySelectorAll("*")) {
+      const text = (child.textContent || "").replace(/\s+/g, " ").trim();
       const isHeader =
         text.length > 0 &&
         text.length < 40 &&
         !child.querySelector('a[href*="/chat/"]') &&
-        /^(today|yesterday|previous \d+ days?|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text);
+        /^(today|yesterday|previous \d+ days?|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(
+          text,
+        );
 
       if (isHeader) {
         currentLabel = text.toLowerCase();
@@ -1080,14 +1323,24 @@
   }
 
   const MONTHS_MAP = {
-    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
   };
 
   // Converts a Claude sidebar section header label to a representative Unix timestamp.
   // Used to sort chats by date bucket when sidebarOrder is stale.
   function bucketToTimestamp(label) {
-    const cleanLabel = (label || '').trim().toLowerCase();
+    const cleanLabel = (label || "").trim().toLowerCase();
     const now = Date.now();
     const d = 86400000; // ms per day
     if (/today/i.test(cleanLabel)) return now - 3600000; // proxy: 1h ago
@@ -1122,20 +1375,22 @@
     let sidebarOrder = 0;
 
     for (const link of links) {
-      const normalized = normalizeChatHref(link.getAttribute('href'));
+      const normalized = normalizeChatHref(link.getAttribute("href"));
       if (!normalized) continue;
       if (byId.has(normalized.chatId)) continue;
 
       const title = getTitleFromLink(link);
       const bucketLabel = buckets.get(link) || null;
-      const sectionTimestamp = bucketLabel ? bucketToTimestamp(bucketLabel) : null;
+      const sectionTimestamp = bucketLabel
+        ? bucketToTimestamp(bucketLabel)
+        : null;
 
       byId.set(normalized.chatId, {
         chatId: normalized.chatId,
         title,
         url: normalized.url,
         sidebarOrder,
-        sectionTimestamp
+        sectionTimestamp,
       });
       sidebarOrder += 1;
     }
@@ -1149,7 +1404,10 @@
     return JSON.stringify({
       accountId,
       isFallback: Boolean(isFallback),
-      chatIds: chats.map(chat => `${chat.sidebarOrder}:${chat.chatId}:${chat.sectionTimestamp || ''}`)
+      chatIds: chats.map(
+        (chat) =>
+          `${chat.sidebarOrder}:${chat.chatId}:${chat.sectionTimestamp || ""}`,
+      ),
     });
   }
 
@@ -1157,7 +1415,7 @@
     const now = Date.now();
     const accountId = account.accountId;
 
-    const localData = await storageGet(['deletedAccountIds']);
+    const localData = await storageGet(["deletedAccountIds"]);
     let localDeleted = localData.deletedAccountIds || [];
 
     let syncedDeleted = {};
@@ -1168,20 +1426,34 @@
       } catch (_) {}
     }
 
-    // Phase 1 — Tombstone Resurrection:
-    // If the account is tombstoned but we have a verified real email (isFallback === false),
-    // the user has deliberately logged back in. Resurrect: clean the tombstone locally and
-    // signal the background worker to remove it from sync.
-    if ((localDeleted.includes(accountId) || syncedDeleted[accountId]) && !account.isFallback) {
+    cctGroup(
+      `🔍 saveScrape — account: ${accountId} | chats: ${chats.length} | isFallback: ${account.isFallback}`,
+    );
+
+    // Tombstone / resurrection check
+    if (
+      (localDeleted.includes(accountId) || syncedDeleted[accountId]) &&
+      !account.isFallback
+    ) {
+      cctLog(
+        "🪦→🌱 Tombstone RESURRECTION for",
+        accountId,
+        "— removing from deletedAccountIds",
+      );
       // Remove from local deleted list
-      localDeleted = localDeleted.filter(id => id !== accountId);
+      localDeleted = localDeleted.filter((id) => id !== accountId);
       await storageSet({ deletedAccountIds: localDeleted });
 
       // Signal background to remove from sync tombstones
       if (hasSyncApi()) {
         try {
-          await chrome.runtime.sendMessage({ type: 'RESURRECT_ACCOUNT', accountId });
-        } catch (_) { /* background may be inactive; local resurrection still proceeds */ }
+          await chrome.runtime.sendMessage({
+            type: "RESURRECT_ACCOUNT",
+            accountId,
+          });
+        } catch (_) {
+          /* background may be inactive; local resurrection still proceeds */
+        }
       }
       // Fall through — allow saveScrape to continue normally
     } else if (localDeleted.includes(accountId) || syncedDeleted[accountId]) {
@@ -1190,8 +1462,9 @@
         syncStatus: {
           ok: false,
           updatedAt: now,
-          message: 'Current Claude account was deleted from tracker; scrape skipped'
-        }
+          message:
+            "Current Claude account was deleted from tracker; scrape skipped",
+        },
       });
       return;
     }
@@ -1200,53 +1473,67 @@
       STORAGE_KEYS.accounts,
       STORAGE_KEYS.chats,
       STORAGE_KEYS.currentAccountId,
-      'lastKnownEmail'
+      "lastKnownEmail",
     ]);
     const originalAccounts = local[STORAGE_KEYS.accounts] || {};
     const originalChats = local[STORAGE_KEYS.chats] || {};
-    const originalCurrentAccountId = local[STORAGE_KEYS.currentAccountId] || '';
+    const originalCurrentAccountId = local[STORAGE_KEYS.currentAccountId] || "";
     const originalLastKnownEmail = local.lastKnownEmail || null;
 
     const accounts = JSON.parse(JSON.stringify(originalAccounts));
     const existingChats = JSON.parse(JSON.stringify(originalChats));
 
-    const currentChatIds = new Set(chats.map(chat => chat.chatId));
+    const currentChatIds = new Set(chats.map((chat) => chat.chatId));
 
-    if (!account.isFallback && profileFallbackAccountId && accounts[profileFallbackAccountId]) {
-      // Phase 2 — Migrate ALL fallback chats, not just currently visible ones.
-      // profileFallbackAccountId is crypto.randomUUID()-derived: unique per Chrome profile,
-      // so cross-profile contamination is impossible. The currentChatIds visibility guard
-      // was the cause of older scrolled-away chats being permanently stranded.
-      const fallbackChats = Object.values(existingChats)
-        .filter(c => c.accountId === profileFallbackAccountId);
+    if (
+      !account.isFallback &&
+      profileFallbackAccountId &&
+      accounts[profileFallbackAccountId]
+    ) {
+      const fallbackChats = Object.values(existingChats).filter(
+        (c) => c.accountId === profileFallbackAccountId,
+      );
+      cctLog(
+        `🔄 Fallback migration: ${fallbackChats.length} chat(s) moving from ${profileFallbackAccountId} → ${accountId}`,
+      );
       for (const chat of fallbackChats) {
         const newStorageId = `${accountId}:${chat.chatId}`;
         existingChats[newStorageId] = {
           ...chat,
           storageId: newStorageId,
-          accountId
+          accountId,
         };
         delete existingChats[chat.storageId];
       }
 
-      // Fix B: Formally tombstone the fallback account so mergeAccounts() cannot
+      // Fix B: Formally tombstone the fallback so mergeAccounts() cannot
       // resurrect it from syncAccounts on the next sync pass.
-      // Without this, the ghost "Patel" account re-appears from sync after migration.
       if (!localDeleted.includes(profileFallbackAccountId)) {
+        cctLog("🪦 Tombstoning fallback account:", profileFallbackAccountId);
         const updatedDeleted = [...localDeleted, profileFallbackAccountId];
         await storageSet({ deletedAccountIds: updatedDeleted });
         if (hasSyncApi()) {
           try {
-            await chrome.runtime.sendMessage({ type: 'TOMBSTONE_ACCOUNT', accountId: profileFallbackAccountId });
-          } catch (_) { /* best-effort — local tombstone is sufficient */ }
+            await chrome.runtime.sendMessage({
+              type: "TOMBSTONE_ACCOUNT",
+              accountId: profileFallbackAccountId,
+            });
+            cctLog(
+              "🪦 Background tombstone confirmed for",
+              profileFallbackAccountId,
+            );
+          } catch (_) {
+            cctWarn("🪦 Background tombstone message failed (non-critical)");
+          }
         }
       }
     }
 
     const existingAccount = accounts[accountId] || {};
-    const displayName = account.displayName
-      || existingAccount.displayName
-      || FALLBACK_ACCOUNT_NAME;
+    const displayName =
+      account.displayName ||
+      existingAccount.displayName ||
+      FALLBACK_ACCOUNT_NAME;
 
     accounts[accountId] = {
       accountId,
@@ -1256,7 +1543,7 @@
       firstSeen: existingAccount.firstSeen || now,
       lastSeen: now,
       isFallback: account.isFallback,
-      autoDetectedName: true
+      autoDetectedName: true,
     };
 
     for (const chat of chats) {
@@ -1273,11 +1560,12 @@
         firstSeen: existingChat.firstSeen || now,
         lastSeen: now,
         // Preserve the most recent non-null sectionTimestamp.
-        sectionTimestamp: chat.sectionTimestamp !== null
-          ? chat.sectionTimestamp
-          : (existingChat.sectionTimestamp || null),
+        sectionTimestamp:
+          chat.sectionTimestamp !== null
+            ? chat.sectionTimestamp
+            : existingChat.sectionTimestamp || null,
         // Preserve server-sourced timestamp — never overwrite with null from DOM scrape.
-        serverUpdatedAt: existingChat.serverUpdatedAt || null
+        serverUpdatedAt: existingChat.serverUpdatedAt || null,
       };
 
       if (!account.isFallback) {
@@ -1289,17 +1577,25 @@
     }
 
     if (!account.isFallback && accounts[profileFallbackAccountId]) {
-      const hasFallbackChats = Object.values(existingChats)
-        .some(c => c.accountId === profileFallbackAccountId);
+      const hasFallbackChats = Object.values(existingChats).some(
+        (c) => c.accountId === profileFallbackAccountId,
+      );
       if (!hasFallbackChats) {
         delete accounts[profileFallbackAccountId];
       }
     }
 
-    // BUG-07 fix A: persist lastKnownEmail so it survives page reloads without needing the panel open.
-    const storagePayload = { accounts, chats: existingChats, [STORAGE_KEYS.currentAccountId]: accountId };
+    // BUG-07/Fix G: persist lastKnownEmail + lastKnownOrgId together.
+    // The org ID is the reliable discriminant on next page load — if it matches,
+    // the same account is logged in and the email can be safely restored.
+    const storagePayload = {
+      accounts,
+      chats: existingChats,
+      [STORAGE_KEYS.currentAccountId]: accountId,
+    };
     if (account.email) {
       storagePayload.lastKnownEmail = account.email;
+      if (cachedOrgId) storagePayload.lastKnownOrgId = cachedOrgId;
     }
 
     // Also persist currentAccountId so the popup "Tracking as" label always reflects
@@ -1311,30 +1607,36 @@
       (account.email && originalLastKnownEmail !== account.email);
 
     if (hasChanged) {
+      cctLog(
+        `💾 saveScrape writing storage: ${chats.length} chat(s) for account ${accountId}`,
+      );
       await storageSet(storagePayload);
-      // Phase 5: store pending sync payload; do NOT dispatch immediately.
       pendingSyncAccounts = accounts;
       pendingSyncChats = existingChats;
-      // Trigger an API-based timestamp refresh (throttled at 60s).
       scheduleApiSync();
+    } else {
+      cctLog("💾 saveScrape: no changes detected — storage write skipped");
     }
+    cctGroupEnd();
   }
 
   async function runFullScrape() {
     if (stopped) return;
-    // Guard against running before initProfileLocalId() completes.
-    // The initial retry delays (800ms+) are long enough that init always finishes first,
-    // but this guard makes the invariant explicit and safe.
     if (!profileFallbackAccountId) return;
 
     await handlePendingOpen();
 
     const accountIdentity = detectAccountIdentity();
     const chats = scrapeVisibleChats();
+    cctLog(
+      `🔍 Scrape: ${chats.length} chat(s) visible | identity: ${accountIdentity.email || accountIdentity.displayName || "unknown"}`,
+    );
 
     if (!hasStorageApi()) {
       if (!warnedStorageUnavailable) {
-        console.info('[Claude Chat Tracker] Extension storage is unavailable in this Claude tab. Reload the extension, then refresh this Claude tab.');
+        console.info(
+          "[Claude Chat Tracker] Extension storage is unavailable in this Claude tab. Reload the extension, then refresh this Claude tab.",
+        );
         warnedStorageUnavailable = true;
       }
       return;
@@ -1346,7 +1648,10 @@
     }
 
     if (!account.email && !warnedMissingAccount) {
-      console.info(`[Claude Chat Tracker] Claude did not expose an account email. Tracking under "${account.displayName}" for this Chrome profile.`);
+      cctLog(
+        "🔍 No email in DOM — tracking under display name:",
+        account.displayName,
+      );
       warnedMissingAccount = true;
     }
 
@@ -1363,34 +1668,45 @@
     if (stopped || document.hidden) return;
 
     // If page hasn't fully loaded yet, wait for readystatechange before scheduling
-    if (document.readyState !== 'complete') {
-      document.addEventListener('readystatechange', () => {
-        if (document.readyState === 'complete') scheduleScrape();
-      }, { once: true });
+    if (document.readyState !== "complete") {
+      document.addEventListener(
+        "readystatechange",
+        () => {
+          if (document.readyState === "complete") scheduleScrape();
+        },
+        { once: true },
+      );
       return;
     }
 
     window.clearTimeout(scrapeTimer);
     scrapeTimer = window.setTimeout(() => {
-      runFullScrape().catch(error => {
+      runFullScrape().catch((error) => {
         if (isExtensionContextInvalidated(error)) {
           stopTracking();
           return;
         }
 
-        console.warn('[Claude Chat Tracker] Scrape failed.', error);
+        console.warn("[Claude Chat Tracker] Scrape failed.", error);
       });
     }, SCRAPE_DEBOUNCE_MS);
   }
 
   function nodeMayContainChats(node) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
-    if (node.matches && node.matches(`${CHAT_LINK_SELECTOR}, ${CHAT_CONTAINER_SELECTOR}`)) return true;
-    return Boolean(node.querySelector && node.querySelector(`${CHAT_LINK_SELECTOR}, ${CHAT_CONTAINER_SELECTOR}`));
+    if (
+      node.matches &&
+      node.matches(`${CHAT_LINK_SELECTOR}, ${CHAT_CONTAINER_SELECTOR}`)
+    )
+      return true;
+    return Boolean(
+      node.querySelector &&
+      node.querySelector(`${CHAT_LINK_SELECTOR}, ${CHAT_CONTAINER_SELECTOR}`),
+    );
   }
 
   function mutationsMayAffectChats(mutations) {
-    return mutations.some(mutation => {
+    return mutations.some((mutation) => {
       if (nodeMayContainChats(mutation.target)) return true;
 
       for (const node of mutation.addedNodes) {
@@ -1406,14 +1722,19 @@
   }
 
   // Phase 5: flush pending sync payload to background worker when conditions are right.
-  // Called on tab-hide and after a 5-minute user-idle window.
   function flushPendingSync() {
-    if (!pendingSyncAccounts || !pendingSyncChats) return;
+    if (!pendingSyncAccounts || !pendingSyncChats) {
+      cctLog("🔄 flushPendingSync: nothing pending — skipping");
+      return;
+    }
+    cctLog("🔄 flushPendingSync: pushing to background sync…");
     const accounts = pendingSyncAccounts;
     const chats = pendingSyncChats;
     pendingSyncAccounts = null;
     pendingSyncChats = null;
-    syncMergedData(accounts, chats).catch(() => { /* best-effort — local data is safe */ });
+    syncMergedData(accounts, chats).catch(() => {
+      /* best-effort */
+    });
   }
 
   // Phase 5: reset the 5-minute idle timer on any user interaction.
@@ -1423,7 +1744,7 @@
   }
 
   function setupObserver() {
-    observer = new MutationObserver(mutations => {
+    observer = new MutationObserver((mutations) => {
       if (stopped) return;
       if (mutationsMayAffectChats(mutations)) {
         scheduleScrape();
@@ -1432,12 +1753,12 @@
 
     observer.observe(document.body || document.documentElement, {
       childList: true,
-      subtree: true
+      subtree: true,
     });
 
     // Phase 5: flush pending sync when tab becomes hidden (user switches tabs / minimises).
     // Also resume scraping when tab becomes visible again.
-    document.addEventListener('visibilitychange', () => {
+    document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         flushPendingSync();
       } else {
@@ -1446,8 +1767,10 @@
     });
 
     // Phase 5: idle sync — reset the 5-min timer on each meaningful user interaction.
-    document.addEventListener('pointerup', resetIdleSyncTimer, { passive: true });
-    document.addEventListener('keyup', resetIdleSyncTimer, { passive: true });
+    document.addEventListener("pointerup", resetIdleSyncTimer, {
+      passive: true,
+    });
+    document.addEventListener("keyup", resetIdleSyncTimer, { passive: true });
     // Seed the timer so a user who never interacts still gets a sync eventually.
     resetIdleSyncTimer();
   }
@@ -1471,10 +1794,10 @@
         if (email && email !== lastDetectedEmail) {
           lastDetectedEmail = email;
           // Force a scrape regardless of snapshot — account identity just upgraded
-          lastSnapshot = '';
+          lastSnapshot = "";
           window.clearTimeout(scrapeTimer);
           scrapeTimer = window.setTimeout(() => {
-            runFullScrape().catch(error => {
+            runFullScrape().catch((error) => {
               if (isExtensionContextInvalidated(error)) stopTracking();
             });
           }, 300);
@@ -1482,15 +1805,16 @@
       }, 500); // throttle: check at most every 500ms, not on every DOM mutation
     });
 
-    const root = document.querySelector('aside') ||
-                 document.querySelector('nav') ||
-                 document.querySelector('header') ||
-                 document.body ||
-                 document.documentElement;
+    const root =
+      document.querySelector("aside") ||
+      document.querySelector("nav") ||
+      document.querySelector("header") ||
+      document.body ||
+      document.documentElement;
 
     accountObserver.observe(root, {
       childList: true,
-      subtree: true
+      subtree: true,
     });
   }
 
@@ -1502,9 +1826,9 @@
   // so runFullScrape()'s snapshot guard would silently skip the save and the popup would
   // remain empty. Resetting lastSnapshot here forces the next scrape to write everything.
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (stopped || areaName !== 'local') return;
+    if (stopped || areaName !== "local") return;
     if (changes.rescrapeRequested && changes.rescrapeRequested.newValue) {
-      lastSnapshot = ''; // invalidate cached snapshot so the next scrape is unconditional
+      lastSnapshot = ""; // invalidate cached snapshot so the next scrape is unconditional
       scheduleScrape();
     }
   });
