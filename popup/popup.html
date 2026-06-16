@@ -11,10 +11,19 @@
     <div class="brand">
       <h1>Claude Chats</h1>
       <p class="status-line">
-        <svg class="sync-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20 7h-4.6a6 6 0 0 0-10 2M4 17h4.6a6 6 0 0 0 10-2M20 7l-3-3M20 7l-3 3M4 17l3 3M4 17l3-3" />
-        </svg>
-        <span id="statusText">Loading...</span>
+        <span id="statsText">Loading...</span>
+        <span class="status-sep">·</span>
+        <span id="syncStatusContainer">
+          <svg class="sync-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 7h-4.6a6 6 0 0 0-10 2M4 17h4.6a6 6 0 0 0 10-2M20 7l-3-3M20 7l-3 3M4 17l3 3M4 17l3-3" />
+          </svg>
+          <svg class="warning-icon" viewBox="0 0 24 24" aria-hidden="true" style="display: none;">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span id="syncText">Syncing...</span>
+        </span>
       </p>
       <!-- IMP-05: sync quota bar -->
       <div id="quotaBar" class="quota-bar" style="display:none" title="">
@@ -32,26 +41,38 @@
   </header>
 
   <main>
-    <label class="search">
-      <span class="sr-only">Search chats</span>
-      <input id="searchInput" type="search" placeholder="Search chats" autocomplete="off" autofocus>
-    </label>
+    <div class="toolbar-row">
+      <label class="search">
+        <span class="sr-only">Search chats</span>
+        <input id="searchInput" type="search" placeholder="Search chats" autocomplete="off">
+      </label>
+      <label for="accountFilterSelect" class="sr-only">Show</label>
+      <select id="accountFilterSelect" class="account-select"></select>
+    </div>
 
-    <div id="searchSummary" class="search-summary"></div>
-    <section class="account-panel" aria-label="Accounts">
-      <div class="account-controls">
-        <label for="accountFilterSelect">Show</label>
-        <select id="accountFilterSelect"></select>
-        <button id="renameBtn" class="small-button" type="button">Rename</button>
-        <button id="deleteAccountBtn" class="small-button danger-button" type="button">Delete</button>
+    <div class="current-line meta-row">
+      <div id="searchSummary" class="search-summary"></div>
+      <div id="accountActionArea" class="account-action-area" style="display: none;">
+        <div id="accountNameDisplay" class="account-name-display" title="Click to rename" tabindex="0" role="button">
+          <span id="selectedAccountNameText" class="name-text"></span>
+          <button id="startDeleteBtn" class="trash-action icon-button ghost-button" type="button" aria-label="Delete account" title="Delete account">
+            <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+          <div id="deleteConfirmActions" class="delete-confirm-actions" style="display: none;">
+            <button id="confirmDeleteBtn" class="confirm-action icon-button ghost-button danger-button" type="button" aria-label="Confirm delete" title="Confirm delete">
+              <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
+            </button>
+            <button id="cancelDeleteBtn" class="cancel-action icon-button ghost-button" type="button" aria-label="Cancel delete" title="Cancel">
+              <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="inlineEditPanel" class="inline-edit-panel" style="display:none" role="dialog" aria-label="Edit account name">
+          <input type="text" id="inlineEditInput" class="inline-edit-input" placeholder="Account name" autocomplete="off">
+        </div>
       </div>
-      <!-- IMP-02: inline edit panel — replaces window.prompt() -->
-      <div id="inlineEditPanel" class="inline-edit-panel" style="display:none" role="dialog" aria-label="Edit account name">
-        <input type="text" id="inlineEditInput" class="inline-edit-input" placeholder="Account name" autocomplete="off">
-        <button id="inlineEditConfirm" class="small-button" type="button">Save</button>
-        <button id="inlineEditCancel" class="small-button" type="button">Cancel</button>
-      </div>
-    </section>
+    </div>
     <section id="chatList" class="chat-list" aria-live="polite"></section>
   </main>
 

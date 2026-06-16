@@ -26,12 +26,31 @@ body {
   height: 640px;
   margin: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 20% -10%, rgba(216, 122, 69, 0.22), transparent 32%),
-    radial-gradient(circle at 88% 12%, rgba(112, 168, 255, 0.16), transparent 30%),
-    linear-gradient(145deg, #111213 0%, #171614 48%, #0e1012 100%);
+  background: #000;
   color: var(--text);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  position: relative;
+}
+
+body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(circle at 20% -10%, rgba(216, 122, 69, 0.45), transparent 40%),
+    radial-gradient(circle at 88% 12%, rgba(112, 168, 255, 0.35), transparent 40%),
+    linear-gradient(145deg, #111213 0%, #171614 48%, #0e1012 100%);
+}
+
+body::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  backdrop-filter: blur(30px);
+  background: rgba(12, 13, 14, 0.2);
+  pointer-events: none;
 }
 
 .topbar {
@@ -63,10 +82,50 @@ h1 {
 .status-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
   margin-top: 3px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.status-sep {
+  color: var(--soft);
+  margin: 0 2px;
+}
+
+#syncStatusContainer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#syncStatusContainer.has-issue {
+  color: var(--yellow);
+  font-weight: 500;
+}
+
+#syncStatusContainer.has-issue .sync-icon {
+  display: none;
+}
+
+#syncStatusContainer.has-issue .warning-icon {
+  display: inline-block !important;
+  color: var(--yellow);
+  width: 12px;
+  height: 12px;
+}
+
+#syncFixLink {
+  color: var(--blue);
+  text-decoration: none;
+  margin-left: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#syncFixLink:hover {
+  text-decoration: underline;
 }
 
 .sync-icon {
@@ -144,7 +203,7 @@ input {
 .small-button:hover,
 .mode-tab:hover,
 .filter-pill:hover {
-  border-color: rgba(216, 122, 69, 0.62);
+  border-color: var(--line-strong);
   background: var(--glass-hover);
 }
 
@@ -159,23 +218,35 @@ input {
   opacity: 0.45;
 }
 
-.search {
-  display: block;
-  padding: 12px 16px 7px;
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px 8px;
 }
 
-.search input {
-  width: 100%;
-  height: 38px;
+.search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.search input,
+.account-select {
+  height: 36px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   outline: none;
   background: rgba(25, 26, 27, 0.72);
   color: var(--text);
   padding: 0 13px;
-  font-size: 14px;
+  font-size: 13px;
   backdrop-filter: blur(16px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-family: inherit;
+}
+
+.search input {
+  width: 100%;
 }
 
 .search input::placeholder {
@@ -184,23 +255,20 @@ input {
 
 .search input:focus {
   border-color: rgba(216, 122, 69, 0.82);
-  box-shadow: 0 0 0 3px rgba(216, 122, 69, 0.14);
+}
+
+.account-select {
+  flex: 0 0 140px;
+  padding: 0 10px;
+}
+
+.meta-row {
+  padding: 0 16px 12px;
 }
 
 .search-summary {
-  min-height: 15px;
-  padding: 0 16px 5px;
   color: var(--muted);
   font-size: 11px;
-}
-
-.account-panel {
-  margin: 0 16px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.045);
-  padding: 11px 12px 12px;
-  backdrop-filter: blur(14px);
 }
 
 .current-line {
@@ -208,13 +276,6 @@ input {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
-}
-
-.current-line span,
-.account-controls label {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 #currentAccountName {
@@ -226,31 +287,95 @@ input {
   white-space: nowrap;
 }
 
-.account-controls {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+.account-action-area {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+  height: 28px;
 }
 
-.account-controls select {
-  min-width: 0;
-  height: 32px;
-  border: 1px solid var(--line);
+.account-name-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 0 6px;
+  margin-right: -6px;
   border-radius: var(--radius);
-  background: rgba(25, 26, 27, 0.78);
-  color: var(--text);
-  padding: 0 10px;
-  font: inherit;
+  transition: background 0.15s;
+  height: 100%;
+}
+
+.account-name-display .name-text {
+  color: var(--muted);
   font-size: 12px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.account-name-display:hover .name-text,
+.account-name-display:focus .name-text {
+  color: var(--text);
+}
+
+.account-name-display:hover,
+.account-name-display:focus {
+  background: rgba(255, 255, 255, 0.04);
+  outline: none;
+}
+
+.trash-action {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s, visibility 0.15s;
+  color: var(--soft);
+}
+
+.trash-action:hover {
+  color: var(--danger);
+  background: rgba(238, 124, 118, 0.1);
+  border-color: rgba(238, 124, 118, 0.2);
+}
+
+.account-name-display:hover .trash-action,
+.account-name-display:focus .trash-action {
+  opacity: 1;
+  visibility: visible;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .chat-list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 10px 12px;
+  padding: 0 10px 12px;
   border-top: 1px solid var(--line);
+}
+
+/* Custom thin scrollbar */
+.chat-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.chat-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
+}
+
+.chat-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .chat-item {
@@ -259,13 +384,13 @@ input {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 68px;
+  min-height: 54px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 9px 11px;
+  padding: 8px 11px;
   text-align: left;
 }
 
@@ -293,15 +418,13 @@ input {
 }
 
 .chat-title {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: normal;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow: hidden;
   font-size: 13px;
-  font-weight: 680;
+  font-weight: 700;
+  color: #ffffff;
   line-height: 1.28;
 }
 
@@ -311,8 +434,8 @@ input {
   gap: 7px;
   min-width: 0;
   margin-top: 4px;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--soft);
+  font-size: 10.5px;
 }
 
 .account-name {
@@ -323,38 +446,54 @@ input {
 
 .status-badge {
   flex: 0 0 auto;
-  border: 1px solid rgba(101, 196, 136, 0.44);
   border-radius: 999px;
-  color: var(--green);
-  padding: 1px 6px 2px;
-  font-size: 10px;
+  padding: 1px 6px;
+  font-size: 9.5px;
   line-height: 1.2;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
-.account-mismatch .status-badge {
-  border-color: rgba(219, 178, 61, 0.45);
-  color: var(--yellow);
+.status-badge.ready {
+  border: 1px solid rgba(101, 196, 136, 0.25);
+  background: rgba(101, 196, 136, 0.06);
+  color: var(--green);
+}
+
+.status-badge.switch {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
 }
 
 .open-mark {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--soft);
+  background: transparent;
+  transition: color 0.13s, background 0.13s, border-color 0.13s;
 }
 
 .open-mark svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
 }
 
 .account-mismatch .open-mark {
-  color: var(--yellow);
-  border-color: rgba(219, 178, 61, 0.28);
+  color: var(--soft);
+  border-color: transparent;
+}
+
+.open-mark:hover,
+.account-mismatch .open-mark:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--line);
 }
 
 .empty-state {
@@ -365,13 +504,20 @@ input {
 
 /* Starred / section divider headers in the chat list */
 .section-header {
-  padding: 10px 11px 4px;
-  font-size: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(18, 19, 20, 0.94);
+  backdrop-filter: blur(8px);
+  margin-top: 10px;
+  padding: 8px 11px 6px;
+  font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--soft);
   user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
 /* Star button — appears between chat info and open-mark */
@@ -380,21 +526,22 @@ input {
   place-items: center;
   width: 26px;
   height: 26px;
-  background: none;
-  border: none;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--soft);
   padding: 0;
   line-height: 1;
   flex-shrink: 0;
-  transition: color 0.13s, background 0.13s;
+  transition: color 0.13s, background 0.13s, border-color 0.13s;
 }
 
 .star-btn:hover {
   color: var(--yellow);
-  background: rgba(219, 178, 61, 0.12);
+  background: rgba(219, 178, 61, 0.08);
+  border-color: rgba(219, 178, 61, 0.18);
 }
 
 /* Gold star when chat is starred */
@@ -402,9 +549,13 @@ input {
   color: var(--yellow);
 }
 
+.chat-item.is-starred .star-btn:hover {
+  background: rgba(219, 178, 61, 0.14);
+}
+
 /* Subtle left accent on starred rows */
 .chat-item.is-starred {
-  border-left-color: rgba(219, 178, 61, 0.35);
+  border-left: 2px solid rgba(219, 178, 61, 0.4);
 }
 
 .sr-only {
@@ -432,32 +583,31 @@ input {
   transition: width 0.4s ease, background 0.4s ease;
 }
 
-/* IMP-02: Inline edit panel — replaces window.prompt() */
+/* Inline edit panel — morphs from account name */
 .inline-edit-panel {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 9px;
+  width: 100%;
+  height: 28px;
   animation: fadeSlideIn 0.14s ease;
 }
 
 @keyframes fadeSlideIn {
-  from { opacity: 0; transform: translateY(-4px); }
+  from { opacity: 0; transform: translateY(-2px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 .inline-edit-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 30px;
-  border: 1px solid rgba(216, 122, 69, 0.62);
+  height: 100%;
+  border: 1px solid var(--accent);
   border-radius: var(--radius);
   outline: none;
-  background: rgba(25, 26, 27, 0.82);
+  background: rgba(25, 26, 27, 0.9);
   color: var(--text);
-  padding: 0 10px;
-  font-size: 13px;
-  backdrop-filter: blur(14px);
+  padding: 0 8px;
+  font-size: 12px;
   box-shadow: 0 0 0 3px rgba(216, 122, 69, 0.12);
 }
 

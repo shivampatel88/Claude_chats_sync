@@ -1,5 +1,54 @@
 'use strict';
 
+if (typeof chrome === 'undefined' || !chrome.storage) {
+  window.chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage: (msg, cb) => {
+        if (msg && msg.type === 'SYNC_DATA') {
+          setTimeout(() => cb({ ok: true, prunedCount: 0 }), 100);
+        }
+      }
+    },
+    storage: {
+      local: {
+        get: (keys) => {
+          return Promise.resolve({
+            currentAccountId: 'acc_1',
+            accounts: {
+              'acc_1': { accountId: 'acc_1', email: 'work@company.com', displayName: 'Work Profile', color: '#4A90D9', isManual: false },
+              'acc_2': { accountId: 'acc_2', email: 'personal@gmail.com', displayName: 'Personal Profile', color: '#D9784A', isManual: false },
+              'acc_3': { accountId: 'acc_3', email: 'hobby@gmail.com', displayName: 'Hobby Projects', color: '#45A878', isManual: false }
+            },
+            chats: {
+              'chat_1': { storageId: 'chat_1', chatId: '1', accountId: 'acc_1', title: 'React Performance Optimization Tips', url: 'https://claude.ai/chat/1', serverUpdatedAt: Date.now() - 5000 },
+              'chat_2': { storageId: 'chat_2', chatId: '2', accountId: 'acc_1', title: 'Rust Web Server Implementation using Axum', url: 'https://claude.ai/chat/2', serverUpdatedAt: Date.now() - 3600000 * 2 },
+              'chat_3': { storageId: 'chat_3', chatId: '3', accountId: 'acc_2', title: 'Premium Dark Theme Design System Audit', url: 'https://claude.ai/chat/3', serverUpdatedAt: Date.now() - 3600000 * 25 },
+              'chat_4': { storageId: 'chat_4', chatId: '4', accountId: 'acc_3', title: 'Weekly Groceries List & Meal Planner', url: 'https://claude.ai/chat/4', serverUpdatedAt: Date.now() - 3600000 * 24 * 5 },
+              'chat_5': { storageId: 'chat_5', chatId: '5', accountId: 'acc_1', title: 'Very Long Title that should be truncated to a single line using text-overflow ellipsis otherwise it breaks the rhythm of the list', url: 'https://claude.ai/chat/5', serverUpdatedAt: Date.now() - 100 }
+            },
+            starredChatIds: ['chat_2']
+          });
+        },
+        set: (vals) => Promise.resolve(),
+        remove: () => Promise.resolve()
+      },
+      sync: {
+        get: (keys) => {
+          return Promise.resolve({
+            syncMeta: { chatChunkCount: 0 }
+          });
+        },
+        set: () => Promise.resolve(),
+        remove: () => Promise.resolve()
+      },
+      onChanged: {
+        addListener: () => {}
+      }
+    }
+  };
+}
+
 const STORAGE_KEYS = {
   accounts: 'accounts',
   chats: 'chats',
@@ -90,18 +139,26 @@ function formatChatDate(timestamp) {
   const diff = Math.max(0, Date.now() - timestamp);
   const minute = 60 * 1000;
   const hour   = 60 * minute;
-  const day    = 24 * hour;
+
+  const now = new Date();
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayMidnight = todayMidnight - 24 * hour;
 
   if (diff < minute)      return 'just now';
   if (diff < hour)        return `${Math.floor(diff / minute)} minutes ago`;
   if (diff < 2 * hour)    return '1 hour ago';
-  if (diff < day)         return `${Math.floor(diff / hour)} hours ago`;
-  if (diff < 2 * day)     return 'Yesterday';
+  if (diff < 24 * hour)   return `${Math.floor(diff / hour)} hours ago`;
+
+  if (timestamp >= yesterdayMidnight) {
+    return 'Yesterday';
+  }
+
+  const day = 24 * hour;
   if (diff < 7 * day)     return `${Math.floor(diff / day)} days ago`;
 
   const d = new Date(timestamp);
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const sameYear = d.getFullYear() === now.getFullYear();
   return sameYear
     ? `${months[d.getMonth()]} ${d.getDate()}`
     : `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
@@ -293,17 +350,61 @@ function renderStatus() {
   const accountCount = Object.keys(state.accounts || {}).length;
   const chatCount = Object.keys(state.chats || {}).length;
   const accountWord = accountCount === 1 ? 'account' : 'accounts';
-  const syncText = state.syncStatus && state.syncStatus.ok === false
-    ? 'sync issue'
-    : 'sync on';
-  // IMP-05 fix: quota warning is read from a module-level flag, never appended to existing text.
-  // This prevents "— ⚠ sync near limit" from being duplicated on every render() call.
-  let text = `${chatCount} chats - ${accountCount} ${accountWord} - ${syncText}`;
-  if (syncQuotaWarning) text += ' — \u26a0 sync near limit';
-  document.getElementById('statusText').textContent = text;
+
+  const statsEl = document.getElementById('statsText');
+  if (statsEl) {
+    statsEl.textContent = `${chatCount} chats · ${accountCount} ${accountWord}`;
+  }
+
+  const container = document.getElementById('syncStatusContainer');
+  const syncTextEl = document.getElementById('syncText');
+
+  if (container && syncTextEl) {
+    if (state.syncStatus && state.syncStatus.ok === false) {
+      container.classList.add('has-issue');
+      syncTextEl.textContent = 'Sync issue';
+
+      let fixLink = document.getElementById('syncFixLink');
+      if (!fixLink) {
+        fixLink = document.createElement('a');
+        fixLink.id = 'syncFixLink';
+        fixLink.textContent = 'Fix';
+        fixLink.href = '#';
+        fixLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const errMessage = state.syncStatus && state.syncStatus.message ? state.syncStatus.message : 'Unknown sync error';
+          if (confirm(`Sync failed: "${errMessage}". Would you like to retry now?`)) {
+            reloadData();
+          }
+        });
+        container.appendChild(fixLink);
+      }
+    } else {
+      container.classList.remove('has-issue');
+      let text = 'Synced';
+      if (syncQuotaWarning) text = 'Synced (near limit)';
+      syncTextEl.textContent = text;
+
+      const fixLink = document.getElementById('syncFixLink');
+      if (fixLink) {
+        fixLink.remove();
+      }
+    }
+  }
+
   const selectedAccount = selectedAccountForActions();
-  document.getElementById('renameBtn').disabled = !selectedAccount;
-  document.getElementById('deleteAccountBtn').disabled = !selectedAccount;
+  const actionArea = document.getElementById('accountActionArea');
+  const nameText = document.getElementById('selectedAccountNameText');
+  
+  if (actionArea && nameText) {
+    if (state.activeAccountId === 'all') {
+      actionArea.style.display = 'none';
+    } else {
+      actionArea.style.display = 'flex';
+      nameText.textContent = selectedAccount ? shortAccountName(selectedAccount) : '';
+    }
+  }
 }
 
 function makeFilterButton(label, accountId, color) {
@@ -454,15 +555,17 @@ function makeChatItem(chat) {
   const account = state.accounts[chat.accountId] || {};
   const isStarred = state.starredChatIds.has(chat.storageId);
 
-  const item = document.createElement('button');
-  item.type = 'button';
+  const item = document.createElement('div');
   item.className = 'chat-item';
+  item.setAttribute('role', 'button');
+  item.setAttribute('tabindex', '0');
   item.classList.toggle('account-mismatch', !canOpenWithoutMismatchWarning(chat));
   item.classList.toggle('is-starred', isStarred);
 
   const dot = document.createElement('span');
   dot.className = 'account-dot';
   dot.style.background = account.color || '#888';
+  dot.title = account.email || shortAccountName(account) || 'Unknown account';
 
   const info = document.createElement('span');
   info.className = 'chat-info';
@@ -474,17 +577,24 @@ function makeChatItem(chat) {
   const meta = document.createElement('span');
   meta.className = 'chat-meta';
 
-  const accountName = document.createElement('span');
-  accountName.className = 'account-name';
-  // Use the best available date: real server timestamp > section bucket > scrape time
+  const dateSpan = document.createElement('span');
+  dateSpan.className = 'chat-date';
   const displayTs = chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
-  accountName.textContent = `${shortAccountName(account)} · ${formatChatDate(displayTs)}`;
+  dateSpan.textContent = formatChatDate(displayTs);
 
   const badge = document.createElement('span');
   badge.className = 'status-badge';
-  badge.textContent = canOpenWithoutMismatchWarning(chat) ? 'Ready' : 'Switch';
+  if (canOpenWithoutMismatchWarning(chat)) {
+    badge.classList.add('ready');
+    badge.textContent = 'Ready';
+    badge.title = 'Ready in current session';
+  } else {
+    badge.classList.add('switch');
+    badge.textContent = 'Switch';
+    badge.title = 'Switch account to open';
+  }
 
-  meta.append(accountName, badge);
+  meta.append(dateSpan, badge);
 
   const mark = document.createElement('span');
   mark.className = 'open-mark';
@@ -507,8 +617,16 @@ function makeChatItem(chat) {
   item.title = !canOpenWithoutMismatchWarning(chat)
     ? `${chat.title || 'Untitled Chat'} - requires ${shortAccountName(account)}`
     : chat.title || '';
+  
   item.addEventListener('click', () => {
     openChat(chat);
+  });
+
+  item.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openChat(chat);
+    }
   });
 
   return item;
@@ -527,6 +645,21 @@ async function toggleStar(storageId) {
   state.starredChatIds = starred;
   await storageSet({ starredChatIds: [...starred] });
   renderChats(); // only re-render the list, not the full popup
+}
+
+function getDayGroup(timestamp) {
+  if (!timestamp) return 'Earlier';
+  const now = new Date();
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
+  
+  if (timestamp >= todayMidnight) {
+    return 'Today';
+  } else if (timestamp >= yesterdayMidnight) {
+    return 'Yesterday';
+  } else {
+    return 'Earlier';
+  }
 }
 
 function renderChats() {
@@ -560,15 +693,20 @@ function renderChats() {
   }
 
   if (starredChats.length > 0) {
-    appendSectionHeader('\u2605 Starred');
+    appendSectionHeader('Starred');
     starredChats.forEach(chat => list.appendChild(makeChatItem(chat)));
-
-    if (normalChats.length > 0) {
-      appendSectionHeader('All chats');
-    }
   }
 
-  normalChats.forEach(chat => list.appendChild(makeChatItem(chat)));
+  let currentGroup = null;
+  normalChats.forEach(chat => {
+    const displayTs = chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
+    const groupLabel = getDayGroup(displayTs);
+    if (groupLabel !== currentGroup) {
+      currentGroup = groupLabel;
+      appendSectionHeader(currentGroup);
+    }
+    list.appendChild(makeChatItem(chat));
+  });
 }
 
 // IMP-05: update the quota bar in the header to show sync storage usage.
@@ -733,121 +871,162 @@ function bindEvents() {
     render();
   });
 
-  document.getElementById('deleteAccountBtn').addEventListener('click', async () => {
-    const account = selectedAccountForActions();
-    if (!account) return;
+  const startDeleteBtn = document.getElementById('startDeleteBtn');
+  const deleteConfirmActions = document.getElementById('deleteConfirmActions');
+  const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+  const cancelDeleteBtn = document.getElementById('cancelDeleteBtn');
+  let deleteTimeout = null;
 
-    const accountName = shortAccountName(account);
-    const accountChats = Object.values(state.chats || {})
-      .filter(chat => chat.accountId === account.accountId);
-
-    if (!confirm(`Delete "${accountName}" and ${accountChats.length} tracked chat${accountChats.length === 1 ? '' : 's'}?`)) {
-      return;
+  function resetDeleteState() {
+    if (startDeleteBtn) startDeleteBtn.style.display = '';
+    if (deleteConfirmActions) deleteConfirmActions.style.display = 'none';
+    if (deleteTimeout) {
+      clearTimeout(deleteTimeout);
+      deleteTimeout = null;
     }
+  }
 
-    // Fix 3.3: create tombstone for deleted account
-    const tombstone = {
-      accountId: account.accountId,
-      deletedAt: Date.now(),
-      deletedByProfileId: state.profileLocalId || 'unknown'
-    };
+  if (startDeleteBtn) {
+    startDeleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startDeleteBtn.style.display = 'none';
+      deleteConfirmActions.style.display = 'flex';
+      deleteTimeout = setTimeout(() => {
+        resetDeleteState();
+      }, 3000);
+    });
+  }
 
-    let syncSuccess = false;
-    let syncError = null;
-    let updatedDeletedAccounts = {};
+  if (cancelDeleteBtn) {
+    cancelDeleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resetDeleteState();
+    });
+  }
 
-    try {
-      const synced = await readSyncedData();
-      const syncedAccounts = { ...synced.accounts };
-      const syncedChats = { ...synced.chats };
+  if (confirmDeleteBtn) {
+    confirmDeleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      resetDeleteState();
 
-      updatedDeletedAccounts = {
-        ...(synced.deletedAccounts || {}),
-        [account.accountId]: tombstone
+      const account = selectedAccountForActions();
+      if (!account) return;
+
+      const accountChats = Object.values(state.chats || {})
+        .filter(chat => chat.accountId === account.accountId);
+
+      // Fix 3.3: create tombstone for deleted account
+      const tombstone = {
+        accountId: account.accountId,
+        deletedAt: Date.now(),
+        deletedByProfileId: state.profileLocalId || 'unknown'
       };
 
-      delete syncedAccounts[account.accountId];
-      for (const chat of Object.values(syncedChats)) {
-        if (chat.accountId === account.accountId) delete syncedChats[chat.storageId];
+      let syncSuccess = false;
+      let syncError = null;
+      let updatedDeletedAccounts = {};
+
+      try {
+        const synced = await readSyncedData();
+        const syncedAccounts = { ...synced.accounts };
+        const syncedChats = { ...synced.chats };
+
+        updatedDeletedAccounts = {
+          ...(synced.deletedAccounts || {}),
+          [account.accountId]: tombstone
+        };
+
+        delete syncedAccounts[account.accountId];
+        for (const chat of Object.values(syncedChats)) {
+          if (chat.accountId === account.accountId) delete syncedChats[chat.storageId];
+        }
+
+        await writeSyncedData(syncedAccounts, syncedChats, updatedDeletedAccounts, Number(synced.meta.chatChunkCount || 0));
+        syncSuccess = true;
+      } catch (error) {
+        syncError = error;
       }
 
-      await writeSyncedData(syncedAccounts, syncedChats, updatedDeletedAccounts, Number(synced.meta.chatChunkCount || 0));
-      syncSuccess = true;
-    } catch (error) {
-      syncError = error;
-    }
+      // Store local compatibility cache for deletedAccountIds
+      state.deletedAccountIds = [...(state.deletedAccountIds || []), account.accountId];
+      await storageSet({ deletedAccountIds: state.deletedAccountIds });
 
-    // Store local compatibility cache for deletedAccountIds
-    state.deletedAccountIds = [...(state.deletedAccountIds || []), account.accountId];
-    await storageSet({ deletedAccountIds: state.deletedAccountIds });
+      if (!syncSuccess) {
+        state.syncStatus = {
+          ok: false,
+          updatedAt: Date.now(),
+          message: syncError && syncError.message ? syncError.message : String(syncError)
+        };
+        await storageSet({ syncStatus: state.syncStatus });
+        alert('Delete completed locally. Cross-profile deletion will not be guaranteed until sync succeeds.');
+      }
 
-    if (!syncSuccess) {
-      state.syncStatus = {
-        ok: false,
-        updatedAt: Date.now(),
-        message: syncError && syncError.message ? syncError.message : String(syncError)
-      };
-      await storageSet({ syncStatus: state.syncStatus });
-      alert('Delete completed locally. Cross-profile deletion will not be guaranteed until sync succeeds.');
-    }
+      // Step 2: delete from local after sync attempt
+      const accounts = { ...state.accounts };
+      const chats = { ...state.chats };
+      delete accounts[account.accountId];
 
-    // Step 2: delete from local after sync attempt
-    const accounts = { ...state.accounts };
-    const chats = { ...state.chats };
-    delete accounts[account.accountId];
+      for (const chat of accountChats) {
+        delete chats[chat.storageId];
+      }
 
-    for (const chat of accountChats) {
-      delete chats[chat.storageId];
-    }
+      const nextAccountId = Object.keys(accounts)[0] || '';
+      if (state.currentAccountId === account.accountId) {
+        state.currentAccountId = nextAccountId;
+      }
+      if (state.activeAccountId === account.accountId) {
+        state.activeAccountId = 'all';
+      }
 
-    const nextAccountId = Object.keys(accounts)[0] || '';
-    if (state.currentAccountId === account.accountId) {
-      state.currentAccountId = nextAccountId;
-    }
-    if (state.activeAccountId === account.accountId) {
-      state.activeAccountId = 'all';
-    }
+      state.accounts = accounts;
+      state.chats = chats;
+      await storageSet({
+        accounts,
+        chats,
+        currentAccountId: state.currentAccountId
+      });
 
-    state.accounts = accounts;
-    state.chats = chats;
-    await storageSet({
-      accounts,
-      chats,
-      currentAccountId: state.currentAccountId
+      render();
     });
-
-    render();
-  });
+  }
 
   // IMP-02: show an inline edit panel instead of window.prompt()
   // This avoids browser prompt() which can be blocked in extension contexts.
   function showInlineEdit(currentValue, onConfirm) {
     const panel = document.getElementById('inlineEditPanel');
     const input = document.getElementById('inlineEditInput');
+    const nameDisplay = document.getElementById('accountNameDisplay');
+
     if (!panel || !input) { // safety fallback to prompt() if DOM not ready
       const val = prompt('Account name', currentValue || '');
       if (val && val.trim()) onConfirm(val.trim());
       return;
     }
     input.value = currentValue || '';
+    if (nameDisplay) nameDisplay.style.display = 'none';
     panel.style.display = 'flex';
     input.focus();
     input.select();
 
-    const cleanup = () => { panel.style.display = 'none'; };
-
-    document.getElementById('inlineEditConfirm').onclick = () => {
-      const val = input.value.trim();
-      cleanup();
-      if (val) onConfirm(val);
+    let finished = false;
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      panel.style.display = 'none';
+      if (nameDisplay) nameDisplay.style.display = '';
     };
-    document.getElementById('inlineEditCancel').onclick = cleanup;
+
+    input.onblur = () => {
+      setTimeout(() => {
+        cleanup();
+      }, 100);
+    };
 
     input.onkeydown = (e) => {
       if (e.key === 'Enter') {
         const val = input.value.trim();
         cleanup();
-        if (val) onConfirm(val);
+        if (val && val !== currentValue) onConfirm(val);
       } else if (e.key === 'Escape') {
         cleanup();
       }
@@ -857,21 +1036,32 @@ function bindEvents() {
   // Expose showInlineEdit so createAccount() can route through the inline panel (IMP-02)
   _showInlineEdit = showInlineEdit;
 
-  document.getElementById('renameBtn').addEventListener('click', () => {
-    const account = selectedAccountForActions();
-    if (!account) {
-      alert('Select an account button first.');
-      return;
-    }
-    showInlineEdit(shortAccountName(account), async (nextName) => {
-      state.accounts[account.accountId] = {
-        ...account,
-        displayName: nextName
-      };
-      await persistData();
-      render();
+  const accountNameDisplay = document.getElementById('accountNameDisplay');
+  if (accountNameDisplay) {
+    accountNameDisplay.addEventListener('click', (e) => {
+      if (e.target.closest('.trash-action') || e.target.closest('.delete-confirm-actions')) return;
+      
+      const account = selectedAccountForActions();
+      if (!account) return;
+      
+      showInlineEdit(shortAccountName(account), async (nextName) => {
+        state.accounts[account.accountId] = {
+          ...account,
+          displayName: nextName
+        };
+        await persistData();
+        render();
+      });
     });
-  });
+
+    accountNameDisplay.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        if (e.target.closest('.trash-action') || e.target.closest('.delete-confirm-actions')) return;
+        e.preventDefault();
+        accountNameDisplay.click();
+      }
+    });
+  }
 
   document.getElementById('clearBtn').addEventListener('click', async () => {
     if (!confirm('Clear local and synced Claude chat index?')) return;
