@@ -776,46 +776,59 @@
     return candidates[0] || null;
   }
 
-  async function tryAutoDetectEmailViaDropdown() {
-    if (emailAutoDetectAttempted || cookieDetectedEmail) return;
-    emailAutoDetectAttempted = true;
+  // How many times we've attempted the auto-detect (reset on success, capped at MAX_ATTEMPTS).
+  const AUTO_DETECT_MAX_ATTEMPTS = 4;
+  let autoDetectAttemptCount = 0;
 
-    // Wait for the sidebar to be present before trying
-    await new Promise((resolve) => {
-      if (document.querySelector("aside, nav")) return resolve();
-      const mo = new MutationObserver(() => {
-        if (document.querySelector("aside, nav")) {
-          mo.disconnect();
-          resolve();
-        }
-      });
-      mo.observe(document.documentElement, { childList: true, subtree: true });
-      window.setTimeout(resolve, 5000); // give up after 5 s if sidebar never appears
+  async function tryAutoDetectEmailViaDropdown() {
+    if (cookieDetectedEmail) return; // already have it
+    if (autoDetectAttemptCount >= AUTO_DETECT_MAX_ATTEMPTS) return; // give up
+    autoDetectAttemptCount++;
+    emailAutoDetectAttempted = true; // still used as a one-shot guard in setupAccountObserver
+
+    // Wait for the profile button itself to appear and stabilise.
+    // On fresh login the sidebar exists but React hasn't mounted the account component yet.
+    const btn = await new Promise((resolve) => {
+      const deadline = Date.now() + 8000;
+      const check = () => {
+        const found = findProfileButton();
+        if (found) return resolve(found);
+        if (Date.now() >= deadline) return resolve(null);
+        window.setTimeout(check, 200);
+      };
+      check();
     });
 
-    const btn = findProfileButton();
     if (!btn) {
-      cctLog("👤 Auto-detect: no profile button found — skipping");
+      cctLog(
+        "👤 Auto-detect: profile button not found after 8 s — attempt",
+        autoDetectAttemptCount,
+      );
+      scheduleAutoDetectRetry();
       return;
     }
 
-    cctLog("👤 Auto-detect: clicking profile button to expose email…");
+    cctLog(
+      "👤 Auto-detect: clicking profile button (attempt",
+      autoDetectAttemptCount,
+      ")…",
+    );
     btn.click();
 
-    // Poll the DOM for up to 1500 ms for an email to appear
+    // After clicking, wait up to 3000 ms for email to appear.
+    // On a slow/freshly-loaded page the dropdown content renders asynchronously.
     const email = await new Promise((resolve) => {
-      const deadline = Date.now() + 1500;
+      const deadline = Date.now() + 3000;
       const poll = () => {
         const found = detectAccountEmail();
         if (found) return resolve(found);
         if (Date.now() >= deadline) return resolve(null);
-        window.setTimeout(poll, 80);
+        window.setTimeout(poll, 100);
       };
       poll();
     });
 
-    // Close the menu: fire Escape on the button (focused element), then on document,
-    // then click the button again if aria-expanded is still true after a settle period.
+    // Close the menu regardless of whether we found an email.
     btn.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
@@ -835,7 +848,6 @@
       btn.click();
       await new Promise((r) => window.setTimeout(r, 80));
     }
-    // Final fallback: click the document body to dismiss any remaining popover
     if (btn.getAttribute("aria-expanded") === "true") {
       document.body.dispatchEvent(
         new MouseEvent("mousedown", { bubbles: true }),
@@ -845,11 +857,42 @@
     if (email) {
       cookieDetectedEmail = email;
       lastDetectedEmail = email;
-      cctLog("✅ Auto-detect: email captured from dropdown:", email);
-      lastSnapshot = ""; // force next scrape to use real identity
+      const attemptThatWorked = autoDetectAttemptCount;
+      autoDetectAttemptCount = 0; // reset on success
+      cctLog(
+        "✅ Auto-detect: email captured:",
+        email,
+        "(attempt",
+        attemptThatWorked,
+        ")",
+      );
+      lastSnapshot = "";
+      scheduleScrape();
     } else {
-      cctLog("👤 Auto-detect: dropdown opened but no email found in DOM");
+      cctLog(
+        "👤 Auto-detect: no email found (attempt",
+        autoDetectAttemptCount,
+        ") — will retry",
+      );
+      scheduleAutoDetectRetry();
     }
+  }
+
+  // Retry with exponential backoff: 3 s, 8 s, 20 s after previous attempt.
+  const AUTO_DETECT_RETRY_DELAYS = [3000, 8000, 20000];
+  function scheduleAutoDetectRetry() {
+    if (cookieDetectedEmail) return;
+    if (autoDetectAttemptCount >= AUTO_DETECT_MAX_ATTEMPTS) {
+      cctLog(
+        "👤 Auto-detect: max attempts reached — giving up, DOM observer will catch manual open",
+      );
+      return;
+    }
+    const delay = AUTO_DETECT_RETRY_DELAYS[autoDetectAttemptCount - 1] || 20000;
+    cctLog("👤 Auto-detect: retry scheduled in", delay / 1000, "s");
+    window.setTimeout(() => {
+      if (!cookieDetectedEmail) tryAutoDetectEmailViaDropdown();
+    }, delay);
   }
 
   // Reads or generates a stable, unique seed for this Chrome profile from local storage,
