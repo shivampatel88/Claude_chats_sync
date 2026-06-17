@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Claude Chat Tracker",
-  "version": "0.5.1",
+  "version": "0.5.5",
   "description": "Track and sync visible Claude.ai chats across your Chrome profiles.",
   "permissions": ["storage", "cookies"],
   "host_permissions": [

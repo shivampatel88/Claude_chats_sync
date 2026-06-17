@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 
-importScripts('../shared/shared.js');
+importScripts("../shared/shared.js");
 
 // IMP-01: Background service worker that owns all chrome.storage.sync writes.
 // This prevents the content script and popup from racing on chunk writes when both
@@ -14,13 +14,11 @@ importScripts('../shared/shared.js');
 // so that rapid scrapes don't pile up and we always converge to the latest state.
 
 const SYNC_KEYS = {
-  accounts: 'syncAccounts',
-  meta: 'syncMeta',
-  chatPrefix: 'syncChats_',
-  deletedAccounts: 'syncDeletedAccounts'
+  accounts: "syncAccounts",
+  meta: "syncMeta",
+  chatPrefix: "syncChats_",
+  deletedAccounts: "syncDeletedAccounts",
 };
-
-
 
 function mergeDeletedAccounts(base = {}, incoming = {}) {
   return { ...base, ...incoming };
@@ -30,17 +28,22 @@ const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 // Fix A: decode a base64url-encoded JWT payload and return the email claim, or null.
 function tryDecodeJwtEmail(value) {
-  if (!value || typeof value !== 'string') return null;
-  const parts = value.split('.');
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split(".");
   if (parts.length !== 3) return null;
   try {
     // Restore standard base64 padding that base64url strips
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '=='.slice(0, (4 - b64.length % 4) % 4);
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "==".slice(0, (4 - (b64.length % 4)) % 4);
     const payload = JSON.parse(atob(padded));
-    if (payload.email && typeof payload.email === 'string') return payload.email.toLowerCase();
+    if (payload.email && typeof payload.email === "string")
+      return payload.email.toLowerCase();
     // Some providers put the email in 'sub'
-    if (payload.sub && typeof payload.sub === 'string' && payload.sub.includes('@')) {
+    if (
+      payload.sub &&
+      typeof payload.sub === "string" &&
+      payload.sub.includes("@")
+    ) {
       return payload.sub.toLowerCase();
     }
   } catch (_) {}
@@ -49,7 +52,7 @@ function tryDecodeJwtEmail(value) {
 
 // Fix A: scan auth cookies across all Claude / Anthropic domains for any JWT containing an email.
 async function extractEmailFromCookies() {
-  const domains = ['claude.ai', 'anthropic.com', 'auth.anthropic.com'];
+  const domains = ["claude.ai", "anthropic.com", "auth.anthropic.com"];
   for (const domain of domains) {
     try {
       const cookies = await chrome.cookies.getAll({ domain });
@@ -70,7 +73,9 @@ function gcTombstones(deletedAccounts = {}, accounts = {}, chats = {}) {
     const age = now - (tombstone.deletedAt || 0);
     if (age > TOMBSTONE_RETENTION_MS) {
       const hasAccount = Boolean(accounts[accId]);
-      const hasChat = Object.values(chats).some(chat => chat.accountId === accId);
+      const hasChat = Object.values(chats).some(
+        (chat) => chat.accountId === accId,
+      );
       if (!hasAccount && !hasChat) {
         delete cleaned[accId];
       }
@@ -80,12 +85,14 @@ function gcTombstones(deletedAccounts = {}, accounts = {}, chats = {}) {
   return cleaned;
 }
 
-
-
 async function readSyncedData() {
   let header = {};
   try {
-    header = await chrome.storage.sync.get([SYNC_KEYS.accounts, SYNC_KEYS.meta, SYNC_KEYS.deletedAccounts]);
+    header = await chrome.storage.sync.get([
+      SYNC_KEYS.accounts,
+      SYNC_KEYS.meta,
+      SYNC_KEYS.deletedAccounts,
+    ]);
   } catch (_) {}
   const meta = header[SYNC_KEYS.meta] || {};
   const chunkCount = Number(meta.chatChunkCount || 0);
@@ -113,7 +120,7 @@ async function readSyncedData() {
     accounts: header[SYNC_KEYS.accounts] || {},
     chats,
     meta,
-    deletedAccounts: header[SYNC_KEYS.deletedAccounts] || {}
+    deletedAccounts: header[SYNC_KEYS.deletedAccounts] || {},
   };
 }
 
@@ -121,45 +128,53 @@ let syncInProgress = false;
 const syncQueue = [];
 
 // Structured logging for the background service worker (visible in chrome://extensions → service worker)
-const BGT = '[CCT-BG]';
-const bgLog  = (...a) => console.log  (BGT, ...a);
-const bgWarn = (...a) => console.warn (BGT, ...a);
+const BGT = "[CCT-BG]";
+const bgLog = (...a) => console.log(BGT, ...a);
+const bgWarn = (...a) => console.warn(BGT, ...a);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // Fix A: GET_ACCOUNT_EMAIL — scan auth-cookie JWTs and return the user's email.
-  if (message.type === 'GET_ACCOUNT_EMAIL') {
-    bgLog('🍪 GET_ACCOUNT_EMAIL: scanning cookies…');
+  if (message.type === "GET_ACCOUNT_EMAIL") {
+    bgLog("🍪 GET_ACCOUNT_EMAIL: scanning cookies…");
     extractEmailFromCookies().then(
-      email => {
-        bgLog(email ? `🍪 Email found: ${email}` : '🍪 No JWT email in cookies');
+      (email) => {
+        bgLog(
+          email ? `🍪 Email found: ${email}` : "🍪 No JWT email in cookies",
+        );
         sendResponse({ ok: true, email });
       },
       (err) => {
-        bgWarn('🍪 Cookie scan error:', err);
+        bgWarn("🍪 Cookie scan error:", err);
         sendResponse({ ok: false, email: null });
-      }
+      },
     );
     return true;
   }
 
   // Fix B: TOMBSTONE_ACCOUNT
-  if (message.type === 'TOMBSTONE_ACCOUNT') {
+  if (message.type === "TOMBSTONE_ACCOUNT") {
     const { accountId } = message;
-    bgLog('🪦 TOMBSTONE_ACCOUNT:', accountId);
+    bgLog("🪦 TOMBSTONE_ACCOUNT:", accountId);
     (async () => {
       try {
         const data = await chrome.storage.sync.get([SYNC_KEYS.deletedAccounts]);
         const deletedAccounts = data[SYNC_KEYS.deletedAccounts] || {};
         if (!deletedAccounts[accountId]) {
-          deletedAccounts[accountId] = { accountId, deletedAt: Date.now(), auto: true };
-          await chrome.storage.sync.set({ [SYNC_KEYS.deletedAccounts]: deletedAccounts });
-          bgLog('🪦 Tombstone written to sync for', accountId);
+          deletedAccounts[accountId] = {
+            accountId,
+            deletedAt: Date.now(),
+            auto: true,
+          };
+          await chrome.storage.sync.set({
+            [SYNC_KEYS.deletedAccounts]: deletedAccounts,
+          });
+          bgLog("🪦 Tombstone written to sync for", accountId);
         } else {
-          bgLog('🪦 Tombstone already exists for', accountId);
+          bgLog("🪦 Tombstone already exists for", accountId);
         }
         sendResponse({ ok: true });
       } catch (err) {
-        bgWarn('🪦 TOMBSTONE_ACCOUNT error:', err);
+        bgWarn("🪦 TOMBSTONE_ACCOUNT error:", err);
         sendResponse({ ok: false });
       }
     })();
@@ -167,36 +182,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   // Phase 1: Tombstone resurrection
-  if (message.type === 'RESURRECT_ACCOUNT') {
+  if (message.type === "RESURRECT_ACCOUNT") {
     const { accountId } = message;
-    bgLog('🌱 RESURRECT_ACCOUNT:', accountId);
+    bgLog("🌱 RESURRECT_ACCOUNT:", accountId);
     (async () => {
       try {
         const data = await chrome.storage.sync.get([SYNC_KEYS.deletedAccounts]);
         const deletedAccounts = data[SYNC_KEYS.deletedAccounts] || {};
         if (deletedAccounts[accountId]) {
           delete deletedAccounts[accountId];
-          await chrome.storage.sync.set({ [SYNC_KEYS.deletedAccounts]: deletedAccounts });
-          bgLog('🌱 Tombstone removed from sync for', accountId);
+          await chrome.storage.sync.set({
+            [SYNC_KEYS.deletedAccounts]: deletedAccounts,
+          });
+          bgLog("🌱 Tombstone removed from sync for", accountId);
         } else {
-          bgLog('🌱 No tombstone found for', accountId, '— nothing to remove');
+          bgLog("🌱 No tombstone found for", accountId, "— nothing to remove");
         }
         sendResponse({ ok: true });
       } catch (err) {
-        bgWarn('🌱 RESURRECT_ACCOUNT error:', err);
-        sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
+        bgWarn("🌱 RESURRECT_ACCOUNT error:", err);
+        sendResponse({
+          ok: false,
+          error: err && err.message ? err.message : String(err),
+        });
       }
     })();
     return true;
   }
 
-  if (message.type !== 'SYNC_DATA') return false;
+  if (message.type !== "SYNC_DATA") return false;
   bgLog(`🔄 SYNC_DATA queued (queue depth: ${syncQueue.length + 1})`);
   syncQueue.push({
     accounts: message.accounts,
     chats: message.chats,
     deletedAccounts: message.deletedAccounts,
-    resolve: sendResponse
+    resolve: sendResponse,
   });
   processQueue();
   return true;
@@ -213,30 +233,47 @@ async function processQueue() {
   try {
     const synced = await readSyncedData();
     let currentAccounts = { ...synced.accounts };
-    let currentChats    = { ...synced.chats };
-    let currentDeleted  = { ...synced.deletedAccounts };
+    let currentChats = { ...synced.chats };
+    let currentDeleted = { ...synced.deletedAccounts };
 
     for (const item of batch) {
-      currentDeleted  = mergeDeletedAccounts(currentDeleted, item.deletedAccounts);
-      currentAccounts = mergeAccounts(currentAccounts, item.accounts, currentDeleted);
-      currentChats    = mergeChats(currentChats, item.chats, currentDeleted);
+      currentDeleted = mergeDeletedAccounts(
+        currentDeleted,
+        item.deletedAccounts,
+      );
+      currentAccounts = mergeAccounts(
+        currentAccounts,
+        item.accounts,
+        currentDeleted,
+      );
+      currentChats = mergeChats(currentChats, item.chats, currentDeleted);
     }
 
-    currentDeleted = gcTombstones(currentDeleted, currentAccounts, currentChats);
+    currentDeleted = gcTombstones(
+      currentDeleted,
+      currentAccounts,
+      currentChats,
+    );
 
-    const prunedCount = await doSyncWrite(currentAccounts, currentChats, currentDeleted);
-    bgLog(`🔄 processQueue done — accounts: ${Object.keys(currentAccounts).length}, chats: ${Object.keys(currentChats).length}, pruned: ${prunedCount}`);
+    const prunedCount = await doSyncWrite(
+      currentAccounts,
+      currentChats,
+      currentDeleted,
+    );
+    bgLog(
+      `🔄 processQueue done — accounts: ${Object.keys(currentAccounts).length}, chats: ${Object.keys(currentChats).length}, pruned: ${prunedCount}`,
+    );
 
     for (const item of batch) {
-      if (typeof item.resolve === 'function') {
+      if (typeof item.resolve === "function") {
         item.resolve({ ok: true, prunedCount, cutoffDays: 90 });
       }
     }
   } catch (err) {
     const errMsg = err && err.message ? err.message : String(err);
-    bgWarn('🔄 processQueue error:', errMsg);
+    bgWarn("🔄 processQueue error:", errMsg);
     for (const item of batch) {
-      if (typeof item.resolve === 'function') {
+      if (typeof item.resolve === "function") {
         item.resolve({ ok: false, error: errMsg });
       }
     }
@@ -246,15 +283,17 @@ async function processQueue() {
   }
 }
 
-
-
 async function doSyncWrite(accounts, chats, deletedAccounts) {
   // Read the current meta to know how many chunks to clean up
   let previousChunkCount = 0;
   try {
     const header = await chrome.storage.sync.get([SYNC_KEYS.meta]);
-    previousChunkCount = Number((header[SYNC_KEYS.meta] || {}).chatChunkCount || 0);
-  } catch (_) { /* if read fails, proceed with 0 */ }
+    previousChunkCount = Number(
+      (header[SYNC_KEYS.meta] || {}).chatChunkCount || 0,
+    );
+  } catch (_) {
+    /* if read fails, proceed with 0 */
+  }
 
   // 3. Before writing sync, remove accounts and chats whose account ID is tombstoned.
   const filteredAccounts = {};
@@ -289,22 +328,81 @@ async function doSyncWrite(accounts, chats, deletedAccounts) {
     }
   } catch (_) {}
 
+  // Sanitise accounts: keep only the known fields to prevent old-version field bloat
+  // from accumulating across sync cycles and eventually overflowing the 8192-byte key limit.
+  const sanitisedAccounts = {};
+  for (const [accId, acc] of Object.entries(filteredAccounts)) {
+    sanitisedAccounts[accId] = {
+      accountId: acc.accountId,
+      email: acc.email || null,
+      displayName: acc.displayName || "",
+      color: acc.color || "#4A90D9",
+      firstSeen: acc.firstSeen || Date.now(),
+      lastSeen: acc.lastSeen || Date.now(),
+    };
+  }
+
   const chunks = makeChatChunks(filteredChats);
   const payload = {
-    [SYNC_KEYS.accounts]: filteredAccounts,
+    [SYNC_KEYS.accounts]: sanitisedAccounts,
     [SYNC_KEYS.deletedAccounts]: deletedAccounts,
     [SYNC_KEYS.meta]: {
       chatChunkCount: chunks.length,
       updatedAt: Date.now(),
-      version: 2
-    }
+      version: 2,
+    },
   };
 
   chunks.forEach((chunk, index) => {
     payload[`${SYNC_KEYS.chatPrefix}${index}`] = chunk;
   });
 
-  await chrome.storage.sync.set(payload);
+  // Pre-write guard: validate no single key exceeds Chrome's 8192-byte per-item limit.
+  // If a value is too large, we split chat chunks further or skip the oversized key.
+  const CHROME_ITEM_LIMIT = 8100; // 8192 with 92-byte safety margin
+  const safePayload = {};
+  const overflowKeys = [];
+  for (const [key, value] of Object.entries(payload)) {
+    const len = JSON.stringify(value).length;
+    if (len > CHROME_ITEM_LIMIT) {
+      overflowKeys.push({ key, len });
+    } else {
+      safePayload[key] = value;
+    }
+  }
+
+  if (overflowKeys.length > 0) {
+    bgWarn(
+      "⚠️  Pre-write overflow detected — keys too large for sync:",
+      overflowKeys.map((k) => k.key + "(" + k.len + "B)").join(", "),
+    );
+    // For chat chunk overflows: re-chunk the offending chunks at half size
+    for (const { key } of overflowKeys) {
+      if (!key.startsWith(SYNC_KEYS.chatPrefix)) {
+        bgWarn("⚠️  Non-chat key overflow, skipping:", key);
+        continue;
+      }
+      const idx = parseInt(key.replace(SYNC_KEYS.chatPrefix, ""), 10);
+      const oversizedChunk = chunks[idx] || [];
+      const half = Math.ceil(oversizedChunk.length / 2);
+      // Write as two smaller keys using a sub-index suffix
+      const subA = oversizedChunk.slice(0, half);
+      const subB = oversizedChunk.slice(half);
+      safePayload[key + "_a"] = subA;
+      if (subB.length > 0) safePayload[key + "_b"] = subB;
+      bgWarn(
+        "⚠️  Re-split chunk",
+        key,
+        "into",
+        key + "_a",
+        "(" + subA.length + ") and",
+        key + "_b",
+        "(" + subB.length + ")",
+      );
+    }
+  }
+
+  await chrome.storage.sync.set(safePayload);
 
   // Remove stale chunk keys from a previous write that had more chunks
   if (previousChunkCount > chunks.length) {
