@@ -170,7 +170,6 @@ function shortAccountName(account) {
 
 function currentAccountDisplay(account) {
   if (!account) return 'Open Claude to detect automatically';
-  if (account.email) return `${shortAccountName(account)} (${account.email})`;
   return shortAccountName(account);
 }
 
@@ -393,17 +392,9 @@ function renderStatus() {
     }
   }
 
-  const selectedAccount = selectedAccountForActions();
   const actionArea = document.getElementById('accountActionArea');
-  const nameText = document.getElementById('selectedAccountNameText');
-  
-  if (actionArea && nameText) {
-    if (state.activeAccountId === 'all') {
-      actionArea.style.display = 'none';
-    } else {
-      actionArea.style.display = 'flex';
-      nameText.textContent = selectedAccount ? shortAccountName(selectedAccount) : '';
-    }
+  if (actionArea) {
+    actionArea.style.display = state.activeAccountId === 'all' ? 'none' : 'flex';
   }
 }
 
@@ -995,7 +986,7 @@ function bindEvents() {
   function showInlineEdit(currentValue, onConfirm) {
     const panel = document.getElementById('inlineEditPanel');
     const input = document.getElementById('inlineEditInput');
-    const nameDisplay = document.getElementById('accountNameDisplay');
+    const icons = document.getElementById('accountIcons');
 
     if (!panel || !input) { // safety fallback to prompt() if DOM not ready
       const val = prompt('Account name', currentValue || '');
@@ -1003,7 +994,7 @@ function bindEvents() {
       return;
     }
     input.value = currentValue || '';
-    if (nameDisplay) nameDisplay.style.display = 'none';
+    if (icons) icons.style.display = 'none';
     panel.style.display = 'flex';
     input.focus();
     input.select();
@@ -1013,13 +1004,11 @@ function bindEvents() {
       if (finished) return;
       finished = true;
       panel.style.display = 'none';
-      if (nameDisplay) nameDisplay.style.display = '';
+      if (icons) icons.style.display = '';
     };
 
     input.onblur = () => {
-      setTimeout(() => {
-        cleanup();
-      }, 100);
+      setTimeout(() => { cleanup(); }, 100);
     };
 
     input.onkeydown = (e) => {
@@ -1036,60 +1025,70 @@ function bindEvents() {
   // Expose showInlineEdit so createAccount() can route through the inline panel (IMP-02)
   _showInlineEdit = showInlineEdit;
 
-  const accountNameDisplay = document.getElementById('accountNameDisplay');
-  if (accountNameDisplay) {
-    accountNameDisplay.addEventListener('click', (e) => {
-      if (e.target.closest('.trash-action') || e.target.closest('.delete-confirm-actions')) return;
-      
+  const renameAccountBtn = document.getElementById('renameAccountBtn');
+  if (renameAccountBtn) {
+    renameAccountBtn.addEventListener('click', () => {
       const account = selectedAccountForActions();
       if (!account) return;
-      
       showInlineEdit(shortAccountName(account), async (nextName) => {
-        state.accounts[account.accountId] = {
-          ...account,
-          displayName: nextName
-        };
+        state.accounts[account.accountId] = { ...account, displayName: nextName };
         await persistData();
         render();
       });
     });
+  }
 
-    accountNameDisplay.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        if (e.target.closest('.trash-action') || e.target.closest('.delete-confirm-actions')) return;
-        e.preventDefault();
-        accountNameDisplay.click();
-      }
+  const closePopupBtn = document.getElementById('closePopupBtn');
+  if (closePopupBtn) {
+    closePopupBtn.addEventListener('click', () => {
+      window.close();
     });
   }
 
-  document.getElementById('clearBtn').addEventListener('click', async () => {
-    if (!confirm('Clear local and synced Claude chat index?')) return;
-    const synced = await readSyncedData();
-    const staleKeys = Array.from(
-      { length: Number(synced.meta.chatChunkCount || 0) },
-      (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`
-    );
-    await chrome.storage.local.remove([
-      STORAGE_KEYS.accounts,
-      STORAGE_KEYS.chats,
-      STORAGE_KEYS.currentAccountId,
-      STORAGE_KEYS.syncStatus
-    ]);
-    await syncRemove([SYNC_KEYS.accounts, SYNC_KEYS.meta, ...staleKeys]);
+  const startClearBtn = document.getElementById('startClearBtn');
+  const clearConfirmModal = document.getElementById('clearConfirmModal');
+  const cancelClearBtn = document.getElementById('cancelClearBtn');
+  const confirmClearBtn = document.getElementById('confirmClearBtn');
+  
+  if (startClearBtn && clearConfirmModal && cancelClearBtn) {
+    startClearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearConfirmModal.style.display = 'grid';
+    });
+    cancelClearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearConfirmModal.style.display = 'none';
+    });
+  }
 
-    // Signal all open Claude tabs that storage was cleared so they reset their
-    // lastSnapshot and immediately re-scrape the sidebar. Without this, the
-    // content script's DOM snapshot still matches and it skips the save entirely.
-    await storageSet({ rescrapeRequested: Date.now() });
-
-    state.accounts = {};
-    state.chats = {};
-    state.currentAccountId = '';
-    state.activeAccountId = 'all';
-    state.syncStatus = null;
-    render();
-  });
+  if (confirmClearBtn && clearConfirmModal) {
+    confirmClearBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      clearConfirmModal.style.display = 'none';
+      
+      const synced = await readSyncedData();
+      const staleKeys = Array.from(
+        { length: Number(synced.meta.chatChunkCount || 0) },
+        (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`
+      );
+      await chrome.storage.local.remove([
+        STORAGE_KEYS.accounts,
+        STORAGE_KEYS.chats,
+        STORAGE_KEYS.currentAccountId,
+        STORAGE_KEYS.syncStatus
+      ]);
+      await syncRemove([SYNC_KEYS.accounts, SYNC_KEYS.meta, ...staleKeys]);
+  
+      await storageSet({ rescrapeRequested: Date.now() });
+  
+      state.accounts = {};
+      state.chats = {};
+      state.currentAccountId = '';
+      state.activeAccountId = 'all';
+      state.syncStatus = null;
+      render();
+    });
+  }
 
   // BUG-01 fix: only react to 'local' storage changes (from the content script).
   // The old listener also reacted to 'sync' area changes, but reloadData() writes syncMeta

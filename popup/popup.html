@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Chat Tracker</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -32,11 +33,12 @@
     </div>
     <div class="header-actions">
       <div id="currentAccountName" class="top-account-name">Detecting...</div>
-      <button id="clearBtn" class="icon-button" type="button" title="Clear tracked data" aria-label="Clear tracked data">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M18 6 6 18M6 6l12 12" />
-        </svg>
-      </button>
+
+      <div class="clear-data-control">
+        <button id="startClearBtn" class="icon-button danger-button" type="button" aria-label="Clear tracked data" title="Clear tracked data">
+          <i class="fa-solid fa-ban" style="color: rgb(181, 24, 24);"></i>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -53,16 +55,18 @@
     <div class="current-line meta-row">
       <div id="searchSummary" class="search-summary"></div>
       <div id="accountActionArea" class="account-action-area" style="display: none;">
-        <div id="accountNameDisplay" class="account-name-display" title="Click to rename" tabindex="0" role="button">
-          <span id="selectedAccountNameText" class="name-text"></span>
-          <button id="startDeleteBtn" class="trash-action icon-button ghost-button" type="button" aria-label="Delete account" title="Delete account">
+        <div id="accountIcons" class="account-icons">
+          <button id="renameAccountBtn" class="acct-icon-btn" type="button" aria-label="Rename account" title="Rename account">
+            <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button id="startDeleteBtn" class="acct-icon-btn" type="button" aria-label="Delete account" title="Delete account">
             <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
           <div id="deleteConfirmActions" class="delete-confirm-actions" style="display: none;">
-            <button id="confirmDeleteBtn" class="confirm-action icon-button ghost-button danger-button" type="button" aria-label="Confirm delete" title="Confirm delete">
+            <button id="confirmDeleteBtn" class="acct-icon-btn danger" type="button" aria-label="Confirm delete" title="Confirm delete">
               <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
             </button>
-            <button id="cancelDeleteBtn" class="cancel-action icon-button ghost-button" type="button" aria-label="Cancel delete" title="Cancel">
+            <button id="cancelDeleteBtn" class="acct-icon-btn" type="button" aria-label="Cancel delete" title="Cancel">
               <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
           </div>
@@ -77,6 +81,16 @@
   </main>
 
   <script src="../shared/shared.js"></script>
+  <div id="clearConfirmModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-title">Clear Tracked Data</div>
+      <div class="modal-body">Are you sure you want to clear all tracked Claude chats? This action cannot be undone.</div>
+      <div class="modal-actions">
+        <button id="cancelClearBtn" class="ghost-button">Cancel</button>
+        <button id="confirmClearBtn" class="text-button danger-button" style="background: rgba(238, 124, 118, 0.15);">Confirm</button>
+      </div>
+    </div>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>
