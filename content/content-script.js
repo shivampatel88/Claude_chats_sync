@@ -1153,13 +1153,14 @@
 
       if (api.apiTitle) {
         const stored = (chat.title || "").trim();
+        const apiTitle = api.apiTitle.trim();
         const isDuplicated =
           stored.length > 10 &&
           stored.slice(0, Math.floor(stored.length / 2)) ===
             stored.slice(Math.floor(stored.length / 2));
-        if (!stored || isDuplicated) {
-          cctLog(`🔧 Title fixed via API: "${stored}" → "${api.apiTitle}"`);
-          chat.title = api.apiTitle;
+        if (!stored || isDuplicated || stored !== apiTitle) {
+          cctLog(`🔧 Title fixed via API: "${stored}" → "${apiTitle}"`);
+          chat.title = apiTitle;
           changed = true;
           titlesFixed++;
         }
@@ -1449,7 +1450,7 @@
       isFallback: Boolean(isFallback),
       chatIds: chats.map(
         (chat) =>
-          `${chat.sidebarOrder}:${chat.chatId}:${chat.sectionTimestamp || ""}`,
+          `${chat.sidebarOrder}:${chat.chatId}:${chat.title}:${chat.sectionTimestamp || ""}`,
       ),
     });
   }
@@ -1616,6 +1617,20 @@
         // Safe because profileFallbackAccountId is unique per Chrome profile — it never
         // matches another profile's fallback ID.
         delete existingChats[`${profileFallbackAccountId}:${chat.chatId}`];
+
+        // Cross-account dedup: if the same chatId is stored under a different real account,
+        // remove those stale entries. This happens when multiple Google emails authenticate
+        // to the same underlying Anthropic account — both sessions see the same chatIds and
+        // store them under different accountIds. Ownership is claimed by the most recent scrape.
+        for (const sid of Object.keys(existingChats)) {
+          const c = existingChats[sid];
+          if (c.chatId === chat.chatId && c.accountId !== accountId) {
+            cctLog(
+              `🧹 Cross-account dedup: removing ${sid} (chatId ${chat.chatId} now owned by ${accountId})`,
+            );
+            delete existingChats[sid];
+          }
+        }
       }
     }
 

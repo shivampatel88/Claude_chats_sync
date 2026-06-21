@@ -155,5 +155,22 @@ function mergeChats(
       delete merged[chat.storageId];
     }
   }
+
+  // Resolve cross-account chatId collisions: keep the most recently seen entry.
+  // This occurs when multiple Google emails authenticate to the same underlying
+  // Anthropic account — both produce different storageIds for the same chatId.
+  const bestByChatId = {};
+  for (const chat of Object.values(merged)) {
+    const existing = bestByChatId[chat.chatId];
+    if (!existing || (chat.lastSeen || 0) > (existing.lastSeen || 0)) {
+      bestByChatId[chat.chatId] = chat;
+    }
+  }
+  for (const chat of Object.values(merged)) {
+    if (bestByChatId[chat.chatId].storageId !== chat.storageId) {
+      delete merged[chat.storageId];
+    }
+  }
+
   return merged;
 }

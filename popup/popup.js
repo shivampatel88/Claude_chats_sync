@@ -342,7 +342,16 @@ function visibleChats() {
     });
   }
 
-  return chats.sort(compareChats);
+  // Safety net: deduplicate by chatId after sorting.
+  // compareChats already puts the best candidate first (starred → most recent → current account),
+  // so the first occurrence of each chatId is always the right one to display.
+  // This guards against any cross-account duplicates that survive the storage layer.
+  const seenChatIds = new Set();
+  return chats.sort(compareChats).filter(chat => {
+    if (seenChatIds.has(chat.chatId)) return false;
+    seenChatIds.add(chat.chatId);
+    return true;
+  });
 }
 
 function renderStatus() {
