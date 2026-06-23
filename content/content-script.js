@@ -1013,6 +1013,13 @@
 
     try {
       const synced = await readSyncedData();
+      const localData = await storageGet(["deletedChatIds"]);
+      const deletedChatIds = localData.deletedChatIds || [];
+      
+      for (const id of deletedChatIds) {
+        if (synced.chats) delete synced.chats[id];
+      }
+      
       const deletedAccounts = synced.deletedAccounts || {};
       const accounts = mergeAccounts(
         synced.accounts,
@@ -1025,6 +1032,7 @@
         accounts,
         chats,
         deletedAccounts,
+        deletedChatIds,
       });
       if (response && response.ok) {
         const msg =
@@ -1034,6 +1042,7 @@
         await storageSet({
           accounts,
           chats,
+          deletedChatIds: [],
           syncStatus: { ok: true, updatedAt: Date.now(), message: msg },
         });
       } else {
@@ -1130,9 +1139,10 @@
     if (!apiChats || apiChats.length === 0) return;
     if (!hasStorageApi()) return;
 
-    const local = await storageGet([STORAGE_KEYS.accounts, STORAGE_KEYS.chats]);
+    const local = await storageGet([STORAGE_KEYS.accounts, STORAGE_KEYS.chats, "deletedChatIds"]);
     const accounts = local[STORAGE_KEYS.accounts] || {};
     const chats = local[STORAGE_KEYS.chats] || {};
+    const deletedChatIds = local.deletedChatIds || [];
 
     const apiMap = new Map(apiChats.map((c) => [c.chatId, c]));
     let dirty = false;
@@ -1161,6 +1171,9 @@
         if (shouldDelete) {
           cctLog(`🗑️ Chat deleted via API sync: "${chat.title}" (${storageId})`);
           delete chats[storageId];
+          if (!deletedChatIds.includes(storageId)) {
+            deletedChatIds.push(storageId);
+          }
           dirty = true;
           orphanedDeleted++;
           continue;
@@ -1201,7 +1214,7 @@
     );
 
     if (dirty) {
-      await storageSet({ chats });
+      await storageSet({ chats, deletedChatIds });
       pendingSyncAccounts = accounts;
       pendingSyncChats = chats;
       cctLog("💾 Local storage updated with server timestamps and deletions");

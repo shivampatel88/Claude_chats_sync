@@ -216,6 +216,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     accounts: message.accounts,
     chats: message.chats,
     deletedAccounts: message.deletedAccounts,
+    deletedChatIds: message.deletedChatIds,
     resolve: sendResponse,
   });
   processQueue();
@@ -247,6 +248,11 @@ async function processQueue() {
         currentDeleted,
       );
       currentChats = mergeChats(currentChats, item.chats, currentDeleted);
+      if (item.deletedChatIds) {
+        for (const id of item.deletedChatIds) {
+          delete currentChats[id];
+        }
+      }
     }
 
     currentDeleted = gcTombstones(
