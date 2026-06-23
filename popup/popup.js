@@ -345,14 +345,26 @@ function visibleChats() {
     });
   }
 
-  // Safety net: deduplicate by chatId after sorting.
-  // compareChats already puts the best candidate first (starred → most recent → current account),
-  // so the first occurrence of each chatId is always the right one to display.
-  // This guards against any cross-account duplicates that survive the storage layer.
-  const seenChatIds = new Set();
+  // Narrowed Fix 3 — display-layer backstop for the transient fallback→real migration window.
+  // During the ~2-4 s window between page load and email resolution, a scrape may write chats
+  // under profileFallbackAccountId (acc_pfl_*). Once the real identity resolves, saveScrape()
+  // migrates those entries to the real accountId. Until that migration completes, both
+  // acc_pfl_xxx:chatId and acc_real:chatId can coexist. We suppress the fallback copy here
+  // so the user sees one clean entry, not two.
+  //
+  // We deliberately do NOT dedup when BOTH entries are under real accounts (no acc_pfl_ prefix):
+  // two genuine accounts can legitimately share a chatId (UUIDs are only namespace-unique).
+  const isFallbackAccount = id => typeof id === 'string' && id.startsWith('acc_pfl_');
+  const seenChatIds = new Map(); // chatId → first winning chat object
   return chats.sort(compareChats).filter(chat => {
-    if (seenChatIds.has(chat.chatId)) return false;
-    seenChatIds.add(chat.chatId);
+    const prior = seenChatIds.get(chat.chatId);
+    if (!prior) {
+      seenChatIds.set(chat.chatId, chat);
+      return true;
+    }
+    // Only suppress when one of the two is a fallback — this is the transient race state.
+    // If both are real accounts, show both entries; it is valid cross-account data.
+    if (isFallbackAccount(prior.accountId) || isFallbackAccount(chat.accountId)) return false;
     return true;
   });
 }

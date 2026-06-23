@@ -906,6 +906,7 @@
       const data = await storageGet([
         STORAGE_KEYS.profileLocalId,
         "lastKnownEmail",
+        "lastKnownOrgId",
         MIGRATION_DOUBLED_TITLES_V1,
         MIGRATION_DOUBLED_TITLES_V2,
       ]);
@@ -919,6 +920,18 @@
       }
       profileFallbackAccountId = `acc_pfl_${id.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
       cctLog("🆔 Fallback account ID:", profileFallbackAccountId);
+
+      // Change B — seed cookieDetectedEmail from persisted lastKnownEmail so the
+      // FIRST scrape (which fires ~2 s after document_idle, before the dropdown
+      // auto-detect has a chance to complete) uses the real account identity.
+      // This closes the race window where early scrapes fall back to profileFallbackAccountId.
+      // Guard: only seed if cookieDetectedEmail isn't already set (e.g. cookie extraction
+      // already ran) to avoid clobbering a more-recently-confirmed value.
+      const storedEmail = data.lastKnownEmail;
+      if (storedEmail && !cookieDetectedEmail) {
+        cookieDetectedEmail = storedEmail;
+        cctLog("🔑 Email seeded from lastKnownEmail:", storedEmail);
+      }
 
       if (!data[MIGRATION_DOUBLED_TITLES_V1]) {
         cctLog("🔧 Running title-dedup migration V1…");
@@ -934,7 +947,10 @@
       }
 
       // Silently click the profile button to expose the email in the DOM,
-      // then immediately close it. Runs async before the first scrape fires.
+      // then immediately close it.  Because cookieDetectedEmail is already seeded
+      // above (if lastKnownEmail was present), tryAutoDetectEmailViaDropdown will
+      // short-circuit immediately (its first guard is: if (cookieDetectedEmail) return)
+      // and skip the intrusive dropdown click — which is exactly the desired behaviour.
       tryAutoDetectEmailViaDropdown();
     } catch (_error) {
       cctError("❌ Init failed — using session-only fallback ID", _error);
@@ -1237,15 +1253,39 @@
     lastApiSyncAt = Date.now();
     cctLog("📡 API sync starting…");
 
-    fetchRecentChats()
+    // Change C — orgId mismatch safety net.
+    // fetchOrganizationId() returns the live org UUID for the currently-logged-in
+    // Claude account.  If it differs from lastKnownOrgId (written by the previous
+    // saveScrape session), the user has switched Claude accounts since last visit.
+    // In that case: invalidate the seeded email, clear the snapshot so the next
+    // scrape re-resolves identity from scratch, and abort this sync cycle.
+    // Guards: both values must be non-null — null orgId means an API failure or
+    // fresh install, not a real account switch; never trigger a reset on that.
+    fetchOrganizationId()
+      .then(async (orgId) => {
+        if (stopped) return;
+        const stored = await storageGet(["lastKnownOrgId"]);
+        const storedOrgId = stored.lastKnownOrgId || null;
+        if (storedOrgId && orgId && orgId !== storedOrgId) {
+          cctWarn(
+            `⚠️ Org ID mismatch — account switched since last session (stored: ${storedOrgId}, live: ${orgId}). Resetting identity.`,
+          );
+          cookieDetectedEmail = null;
+          lastSnapshot = "";
+          scheduleScrape();
+          return; // abort this sync cycle; next scrape will re-resolve identity
+        }
+        return fetchRecentChats();
+      })
       .then((apiChats) => {
         if (!stopped && apiChats) {
           applyServerTimestamps(apiChats, accountId);
-        } else if (!apiChats) {
+        } else if (apiChats === null) {
           cctLog(
             "📡 API sync returned no data — will retry on next scrape cycle",
           );
         }
+        // apiChats === undefined means we returned early from the mismatch branch — no-op
       })
       .catch((err) => cctWarn("📡 API sync error:", err.message || err));
   }
@@ -1656,21 +1696,16 @@
         // Remove the same chat if it was previously stored under this profile's fallback ID.
         // Safe because profileFallbackAccountId is unique per Chrome profile — it never
         // matches another profile's fallback ID.
+        //
+        // Change A — the former "cross-account cleanup loop" that deleted any storageId
+        // sharing this chatId under a different accountId has been intentionally removed.
+        // Rationale: two genuine separate Claude accounts CAN produce the same chatId
+        // (UUIDs are only namespace-unique, not globally unique across orgs). Deleting the
+        // other account's entry on every scrape was causing permanent data loss. The
+        // fallback→real migration above (lines ~1577-1613) is the correct and safe mechanism
+        // for reclaiming chats written under profileFallbackAccountId; it is profile-scoped
+        // and cannot touch entries belonging to other real accounts.
         delete existingChats[`${profileFallbackAccountId}:${chat.chatId}`];
-
-        // Cross-account dedup: if the same chatId is stored under a different real account,
-        // remove those stale entries. This happens when multiple Google emails authenticate
-        // to the same underlying Anthropic account — both sessions see the same chatIds and
-        // store them under different accountIds. Ownership is claimed by the most recent scrape.
-        for (const sid of Object.keys(existingChats)) {
-          const c = existingChats[sid];
-          if (c.chatId === chat.chatId && c.accountId !== accountId) {
-            cctLog(
-              `🧹 Cross-account dedup: removing ${sid} (chatId ${chat.chatId} now owned by ${accountId})`,
-            );
-            delete existingChats[sid];
-          }
-        }
       }
     }
 

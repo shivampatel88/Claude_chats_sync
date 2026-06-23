@@ -156,21 +156,24 @@ function mergeChats(
     }
   }
 
-  // Resolve cross-account chatId collisions: keep the most recently seen entry.
-  // This occurs when multiple Google emails authenticate to the same underlying
-  // Anthropic account — both produce different storageIds for the same chatId.
-  const bestByChatId = {};
-  for (const chat of Object.values(merged)) {
-    const existing = bestByChatId[chat.chatId];
-    if (!existing || (chat.lastSeen || 0) > (existing.lastSeen || 0)) {
-      bestByChatId[chat.chatId] = chat;
-    }
-  }
-  for (const chat of Object.values(merged)) {
-    if (bestByChatId[chat.chatId].storageId !== chat.storageId) {
-      delete merged[chat.storageId];
-    }
-  }
+  // NOTE: we intentionally do NOT deduplicate by chatId across accounts here.
+  //
+  // Rationale:
+  //   - The same chatId appearing under two different accountIds is a valid state.
+  //     Claude's chatId (UUID) is scoped to an org, not globally unique across the
+  //     entire system — two separate orgs can independently generate the same UUID.
+  //   - A "same storageId appearing twice" scenario is impossible by construction:
+  //     storageId = accountId + ":" + chatId, so if both components match, the two
+  //     entries are literally the same object and the merge keying by storageId has
+  //     already collapsed them.
+  //   - Cross-account chatId dedup in this layer was previously added as Fix 2 under
+  //     the (incorrect) assumption that two emails mapped to the same Claude account.
+  //     That assumption was disproved. The fix has been reverted to prevent silent
+  //     data loss for legitimate cross-account chatId coincidences.
+  //   - The display layer (visibleChats in popup.js) handles the transient overlap
+  //     created by the fallback→real migration window by suppressing entries whose
+  //     accountId starts with "acc_pfl_" when a real-account entry for the same
+  //     chatId already exists.
 
   return merged;
 }
