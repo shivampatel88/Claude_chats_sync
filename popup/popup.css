@@ -694,3 +694,46 @@ input {
   justify-content: flex-end;
   gap: 12px;
 }
+
+/* Content-search snippet row */
+.chat-snippet {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-snippet mark {
+  background: rgba(216, 122, 69, 0.28);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Indexing progress pill — shown in account action area */
+.index-status {
+  font-size: 10px;
+  color: var(--soft);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.index-status .index-btn {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--glass);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.index-status .index-btn:hover {
+  background: var(--glass-hover);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
