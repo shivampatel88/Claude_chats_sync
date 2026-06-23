@@ -77,6 +77,9 @@ const ACCOUNT_COLORS = [
 
 
 
+let searchIndexHandle = null;
+let indexProgressPollTimer = null;
+
 let state = {
   accounts: {},
   chats: {},
@@ -405,6 +408,93 @@ function renderStatus() {
   if (actionArea) {
     actionArea.style.display = state.activeAccountId === 'all' ? 'none' : 'flex';
   }
+  
+  const account = selectedAccountForActions();
+  if (account && state.activeAccountId !== 'all') {
+    updateIndexStatusUI(account);
+  } else if (indexProgressPollTimer) {
+    clearInterval(indexProgressPollTimer);
+    indexProgressPollTimer = null;
+  }
+}
+
+async function updateIndexStatusUI(account) {
+  let statusContainer = document.getElementById('indexStatusContainer');
+  if (!statusContainer) {
+    const actionArea = document.getElementById('accountActionArea');
+    if (!actionArea) return;
+    statusContainer = document.createElement('div');
+    statusContainer.id = 'indexStatusContainer';
+    statusContainer.className = 'index-status';
+    const icons = document.getElementById('accountIcons');
+    if (icons) {
+      actionArea.insertBefore(statusContainer, icons);
+    } else {
+      actionArea.appendChild(statusContainer);
+    }
+  }
+
+  if (indexProgressPollTimer) {
+    clearInterval(indexProgressPollTimer);
+    indexProgressPollTimer = null;
+  }
+
+  const renderIndexStatus = async () => {
+    const local = await storageGet(['indexingQueue']);
+    const q = local.indexingQueue;
+    statusContainer.replaceChildren();
+
+    if (!q || q.accountId !== account.accountId || q.status === 'idle') {
+      const btn = document.createElement('button');
+      btn.className = 'index-btn';
+      btn.textContent = 'Index';
+      btn.onclick = () => triggerIndexing(account);
+      statusContainer.appendChild(btn);
+    } else if (q.status === 'running' || q.status === 'paused-tab-hidden') {
+      const total = q.doneChatIds.length + q.pendingChatIds.length + q.failedChatIds.length;
+      statusContainer.textContent = `Indexing: ${q.doneChatIds.length}/${total}`;
+      if (!indexProgressPollTimer) {
+        indexProgressPollTimer = setInterval(renderIndexStatus, 1500);
+      }
+    } else if (q.status === 'paused-ratelimited') {
+      statusContainer.textContent = 'Paused (Rate limit)';
+    } else if (q.status === 'complete') {
+      const d = new Date(q.startedAt || Date.now());
+      statusContainer.textContent = `Indexed ${formatChatDate(d.getTime())}`;
+      const btn = document.createElement('button');
+      btn.className = 'index-btn';
+      btn.style.marginLeft = '5px';
+      btn.textContent = 'Re-index';
+      btn.onclick = () => triggerIndexing(account);
+      statusContainer.appendChild(btn);
+    }
+  };
+  
+  await renderIndexStatus();
+}
+
+async function triggerIndexing(account) {
+  const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*', active: true, currentWindow: true });
+  if (tabs.length === 0) {
+    alert("Please open a claude.ai tab first to start indexing.");
+    return;
+  }
+  
+  const statusContainer = document.getElementById('indexStatusContainer');
+  if (statusContainer) statusContainer.textContent = 'Starting...';
+
+  // The content script will fetch the orgId if we don't have it
+  chrome.tabs.sendMessage(tabs[0].id, { 
+    type: 'CCT_INDEX_ACCOUNT', 
+    accountId: account.accountId,
+    orgId: null 
+  }).catch(() => {
+    alert("Could not reach Claude tab. Please refresh the claude.ai page and try again.");
+  });
+  
+  if (!indexProgressPollTimer) {
+    indexProgressPollTimer = setInterval(() => updateIndexStatusUI(account), 1500);
+  }
 }
 
 function makeFilterButton(label, accountId, color) {
@@ -590,8 +680,8 @@ function makeChatItem(chat) {
     badge.title = 'Ready in current session';
   } else {
     badge.classList.add('switch');
-    badge.textContent = 'Switch';
-    badge.title = 'Switch account to open';
+    badge.textContent = shortAccountName(account);
+    badge.title = `Switch to ${shortAccountName(account)} to open`;
   }
 
   meta.append(dateSpan, badge);
@@ -600,6 +690,22 @@ function makeChatItem(chat) {
   mark.className = 'open-mark';
   mark.appendChild(createOpenIcon());
   mark.setAttribute('aria-hidden', 'true');
+
+  if (chat._snippet) {
+    const snippetEl = document.createElement('div');
+    snippetEl.className = 'chat-snippet';
+    const escapedSnippet = chat._snippet.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const qToken = state.query.trim().split(/\s+/)[0]; 
+    if (qToken && qToken.length >= 2) {
+      const regex = new RegExp(`(${qToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      snippetEl.innerHTML = escapedSnippet.replace(regex, '<mark>$1</mark>');
+    } else {
+      snippetEl.textContent = chat._snippet;
+    }
+    info.append(title, meta, snippetEl);
+  } else {
+    info.append(title, meta);
+  }
 
   // Star button — sits between info and open-mark
   const starBtn = document.createElement('button');
@@ -612,7 +718,6 @@ function makeChatItem(chat) {
     toggleStar(chat.storageId);
   });
 
-  info.append(title, meta);
   item.append(dot, info, starBtn, mark);
   item.title = !canOpenWithoutMismatchWarning(chat)
     ? `${chat.title || 'Untitled Chat'} - requires ${shortAccountName(account)}`
@@ -664,8 +769,32 @@ function getDayGroup(timestamp) {
 
 function renderChats() {
   const list = document.getElementById('chatList');
-  const allChats = visibleChats(); // already sorted by compareChats (starred first)
+  let allChats = visibleChats(); // already sorted by compareChats (starred first)
   const summary = document.getElementById('searchSummary');
+
+  const queryRaw = state.query.trim();
+  if (queryRaw && searchIndexHandle && window.searchContent) {
+    const contentResults = window.searchContent(searchIndexHandle, queryRaw);
+    const titleMatchIds = new Set(allChats.map(c => c.storageId));
+    
+    // Merge: content matches that weren't already found by title
+    for (const res of contentResults) {
+      if (!titleMatchIds.has(res.storageId)) {
+        const chatObj = state.chats[res.storageId];
+        if (chatObj) {
+          // Clone it so we don't mutate the state object with the snippet
+          const cloned = { ...chatObj, _snippet: res.snippet };
+          allChats.push(cloned);
+        }
+      } else {
+        // If it WAS matched by title, also add the snippet if we have one
+        const idx = allChats.findIndex(c => c.storageId === res.storageId);
+        if (idx !== -1) {
+          allChats[idx] = { ...allChats[idx], _snippet: res.snippet };
+        }
+      }
+    }
+  }
 
   const starredChats = allChats.filter(c => state.starredChatIds.has(c.storageId));
   const normalChats  = allChats.filter(c => !state.starredChatIds.has(c.storageId));
@@ -800,7 +929,22 @@ async function reloadData() {
     }
   }
 
+  // Phase A Search Engine: build index
+  if (window.buildSearchIndex) {
+    searchIndexHandle = await window.buildSearchIndex();
+  }
+
+  maybeResumeQueue();
+
   render();
+}
+
+async function maybeResumeQueue() {
+  const local = await storageGet(['indexingQueue']);
+  const q = local.indexingQueue;
+  if (!q || (q.status !== 'running' && q.status !== 'paused-tab-hidden')) return;
+  const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*', active: true, currentWindow: true });
+  if (tabs.length > 0) chrome.tabs.sendMessage(tabs[0].id, { type: 'CCT_RESUME_INDEXING' }).catch(() => {});
 }
 
 // IMP-01: send sync data to the background service worker rather than writing directly.
@@ -985,6 +1129,15 @@ function bindEvents() {
         chats,
         currentAccountId: state.currentAccountId
       });
+      
+      if (window.deleteChatContentForAccount) {
+        await window.deleteChatContentForAccount(account.accountId);
+      }
+      
+      // Rebuild search index after deletion
+      if (window.buildSearchIndex) {
+        searchIndexHandle = await window.buildSearchIndex();
+      }
 
       render();
     });

@@ -1126,7 +1126,7 @@
 
   // Step 3: merge server timestamps (and titles where the API is cleaner) into
   // local storage without triggering a full re-scrape.
-  async function applyServerTimestamps(apiChats) {
+  async function applyServerTimestamps(apiChats, currentAccountId) {
     if (!apiChats || apiChats.length === 0) return;
     if (!hasStorageApi()) return;
 
@@ -1138,8 +1138,35 @@
     let dirty = false;
     let timestampsUpdated = 0;
     let titlesFixed = 0;
+    let orphanedDeleted = 0;
 
-    for (const chat of Object.values(chats)) {
+    let oldestApiTs = 0;
+    if (apiChats.length >= 100) {
+      oldestApiTs = Math.min(...apiChats.map((c) => c.updatedAt || 0));
+    }
+
+    for (const [storageId, chat] of Object.entries(chats)) {
+      if (currentAccountId && chat.accountId === currentAccountId && !apiMap.has(chat.chatId)) {
+        let shouldDelete = false;
+        if (apiChats.length < 100) {
+          shouldDelete = true;
+        } else {
+          if (chat.serverUpdatedAt && chat.serverUpdatedAt >= oldestApiTs) {
+            shouldDelete = true;
+          } else if (!chat.serverUpdatedAt && chat.sectionTimestamp && chat.sectionTimestamp >= oldestApiTs) {
+            shouldDelete = true;
+          }
+        }
+
+        if (shouldDelete) {
+          cctLog(`🗑️ Chat deleted via API sync: "${chat.title}" (${storageId})`);
+          delete chats[storageId];
+          dirty = true;
+          orphanedDeleted++;
+          continue;
+        }
+      }
+
       const api = apiMap.get(chat.chatId);
       if (!api) continue;
 
@@ -1170,14 +1197,14 @@
     }
 
     cctLog(
-      `💾 applyServerTimestamps: ${timestampsUpdated} timestamps updated, ${titlesFixed} titles fixed`,
+      `💾 applyServerTimestamps: ${timestampsUpdated} timestamps updated, ${titlesFixed} titles fixed, ${orphanedDeleted} orphaned deleted`,
     );
 
     if (dirty) {
       await storageSet({ chats });
       pendingSyncAccounts = accounts;
       pendingSyncChats = chats;
-      cctLog("💾 Local storage updated with server timestamps");
+      cctLog("💾 Local storage updated with server timestamps and deletions");
     } else {
       cctLog("💾 No changes — all timestamps already current");
     }
@@ -1185,7 +1212,7 @@
 
   // Throttled entry point: called from runFullScrape() on every scrape that produces
   // a change.  The 60-second guard means we never hammer Claude's API.
-  function scheduleApiSync() {
+  function scheduleApiSync(accountId) {
     if (stopped) return;
     const elapsed = Date.now() - lastApiSyncAt;
     if (elapsed < API_SYNC_INTERVAL_MS) {
@@ -1200,7 +1227,7 @@
     fetchRecentChats()
       .then((apiChats) => {
         if (!stopped && apiChats) {
-          applyServerTimestamps(apiChats);
+          applyServerTimestamps(apiChats, accountId);
         } else if (!apiChats) {
           cctLog(
             "📡 API sync returned no data — will retry on next scrape cycle",
@@ -1671,7 +1698,7 @@
       await storageSet(storagePayload);
       pendingSyncAccounts = accounts;
       pendingSyncChats = existingChats;
-      scheduleApiSync();
+      scheduleApiSync(accountId);
     } else {
       cctLog("💾 saveScrape: no changes detected — storage write skipped");
     }
@@ -1891,6 +1918,24 @@
     }
   });
 
+  // Handle messages from the popup
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'CCT_RESUME_INDEXING') {
+      const { queue } = window.__cctInternal || {};
+      if (queue) queue.resume();
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (message.type === 'CCT_INDEX_ACCOUNT') {
+      const { indexAccount } = window.__cctInternal || {};
+      if (indexAccount) {
+        indexAccount(message.accountId, message.orgId).catch(err => cctWarn("Index account failed:", err));
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+  });
+
   // Load (or generate) the per-profile identity seed before scheduling any scrapes.
   // initProfileLocalId() sets profileFallbackAccountId, which runFullScrape() requires.
   initProfileLocalId().then(() => {
@@ -1898,4 +1943,10 @@
       window.setTimeout(scheduleScrape, delay);
     }
   });
+  // Private cross-file bridge for extension-internal modules loaded in the same context.
+  // Do not access from page scripts — namespaced under __cctInternal to signal intent.
+  window.__cctInternal = window.__cctInternal || {};
+  window.__cctInternal.fetchRecentChats = fetchRecentChats;
+  window.__cctInternal.fetchOrganizationId = fetchOrganizationId;
+
 })();
