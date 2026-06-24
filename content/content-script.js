@@ -924,14 +924,56 @@
       // Change B — seed cookieDetectedEmail from persisted lastKnownEmail so the
       // FIRST scrape (which fires ~2 s after document_idle, before the dropdown
       // auto-detect has a chance to complete) uses the real account identity.
-      // This closes the race window where early scrapes fall back to profileFallbackAccountId.
-      // Guard: only seed if cookieDetectedEmail isn't already set (e.g. cookie extraction
-      // already ran) to avoid clobbering a more-recently-confirmed value.
+      //
+      // Security gate: we only trust the seeded email if we can validate it against
+      // the live org ID BEFORE the first scrape fires. initProfileLocalId() is awaited
+      // by the init chain (see bottom of file), so this fetch completes before any
+      // scheduleScrape() call. If the org IDs don't match, the user switched accounts
+      // since last session — clear both stale values and let the dropdown detect run.
       const storedEmail = data.lastKnownEmail;
-      if (storedEmail && !cookieDetectedEmail) {
-        cookieDetectedEmail = storedEmail;
-        cctLog("🔑 Email seeded from lastKnownEmail:", storedEmail);
+      const storedOrgIdForSeed = data.lastKnownOrgId;
+      if (storedEmail && storedOrgIdForSeed) {
+        // We have a stored email AND a stored orgId to validate against.
+        // Fetch the live orgId now (before scheduleScrape) to confirm they match.
+        cctLog("🔑 Validating stored email against live org ID before seeding…");
+        try {
+          const liveOrgId = await fetchOrganizationId();
+          if (liveOrgId && liveOrgId === storedOrgIdForSeed) {
+            // OrgIds match — same account as last session, seed is safe.
+            if (!cookieDetectedEmail) {
+              cookieDetectedEmail = storedEmail;
+              cctLog("🔑 Email seeded from lastKnownEmail (validated):", storedEmail);
+            }
+          } else if (liveOrgId && liveOrgId !== storedOrgIdForSeed) {
+            // OrgIds differ — account switched since last session.
+            // Clear stale values from storage so scheduleApiSync doesn't loop.
+            cctWarn(
+              `🔑 Stored email "${storedEmail}" failed org validation (stored: ${storedOrgIdForSeed}, live: ${liveOrgId}). Clearing stale identity.`,
+            );
+            await storageSet({ lastKnownEmail: null, lastKnownOrgId: null });
+            // Do NOT seed cookieDetectedEmail — let dropdown auto-detect resolve it.
+          } else {
+            // liveOrgId is null — API failure or fresh install; seed optimistically,
+            // the mismatch guard in scheduleApiSync will catch it if wrong.
+            if (!cookieDetectedEmail) {
+              cookieDetectedEmail = storedEmail;
+              cctLog("🔑 Email seeded from lastKnownEmail (org fetch failed, optimistic):", storedEmail);
+            }
+          }
+        } catch (orgFetchErr) {
+          // Non-fatal — seed optimistically, mismatch guard is the backstop.
+          if (!cookieDetectedEmail) {
+            cookieDetectedEmail = storedEmail;
+            cctLog("🔑 Email seeded from lastKnownEmail (org fetch error, optimistic):", storedEmail);
+          }
+        }
+      } else if (storedEmail && !storedOrgIdForSeed) {
+        // Have email but no orgId to validate against — unsafe to seed.
+        // This happens on a fresh install or if a previous session never wrote orgId.
+        // Don't seed; let dropdown auto-detect run cleanly.
+        cctLog("🔑 lastKnownEmail present but no lastKnownOrgId to validate — skipping seed, letting dropdown detect run.");
       }
+      // (If neither is stored, nothing to seed — normal fresh-install path.)
 
       if (!data[MIGRATION_DOUBLED_TITLES_V1]) {
         cctLog("🔧 Running title-dedup migration V1…");
@@ -1272,6 +1314,12 @@
           );
           cookieDetectedEmail = null;
           lastSnapshot = "";
+          // Bug 1 fix: MUST clear lastKnownEmail and lastKnownOrgId from persistent
+          // storage here. Without this, the fallback scrape that follows has no email
+          // so saveScrape never writes lastKnownOrgId — leaving the stale value in
+          // storage. Every subsequent API sync then sees the same mismatch and resets
+          // again, creating an infinite reset loop.
+          await storageSet({ lastKnownEmail: null, lastKnownOrgId: null });
           scheduleScrape();
           return; // abort this sync cycle; next scrape will re-resolve identity
         }
