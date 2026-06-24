@@ -77,6 +77,12 @@
   let lastSyncAt = 0;
   let lastDetectedEmail = null; // persisted email seed so first scrape uses real identity
   let cookieDetectedEmail = null; // email extracted from auth-cookie JWT by background worker at init
+
+  // Gate that resolves when identity is confirmed — scrapes wait on this.
+  let identityReadyResolve;
+  const identityReady = new Promise(resolve => {
+    identityReadyResolve = resolve;
+  });
   let warnedMissingAccount = false;
   let warnedStorageUnavailable = false;
   let stopped = false;
@@ -998,6 +1004,10 @@
       cctError("❌ Init failed — using session-only fallback ID", _error);
       profileFallbackAccountId = `acc_pfl_${Date.now().toString(36)}`;
     } finally {
+      // ✅ Identity is as resolved as it's going to be synchronously.
+      // Scrapes may now fire. If email is still null, fallback will be used
+      // but the dropdown auto-detect will upgrade it shortly after.
+      identityReadyResolve();
       cctGroupEnd();
     }
   }
@@ -1804,6 +1814,11 @@
   async function runFullScrape() {
     if (stopped) return;
     if (!profileFallbackAccountId) return;
+
+    // Wait for init to fully resolve identity before first scrape.
+    // This eliminates the race window where chats get written under
+    // acc_pfl_... because the orgId fetch hadn't finished yet.
+    await identityReady;
 
     await handlePendingOpen();
 
