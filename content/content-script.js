@@ -1083,18 +1083,28 @@
       const synced = await readSyncedData();
       const localData = await storageGet(["deletedChatIds"]);
       const deletedChatIds = localData.deletedChatIds || [];
-      
+
+      // Remove deleted storageIds from the sync side.
       for (const id of deletedChatIds) {
         if (synced.chats) delete synced.chats[id];
       }
-      
+
+      // Fix: also strip deletedChatIds from localChats before merging.
+      // Without this, a storageId deleted by the phantom purge in applyServerTimestamps()
+      // can re-enter the merged result via localChats — re-writing the phantom entry to
+      // sync storage and causing an infinite re-hydration cycle on the next page load.
+      const filteredLocalChats = {};
+      for (const [sid, chat] of Object.entries(localChats || {})) {
+        if (!deletedChatIds.includes(sid)) filteredLocalChats[sid] = chat;
+      }
+
       const deletedAccounts = synced.deletedAccounts || {};
       const accounts = mergeAccounts(
         synced.accounts,
         localAccounts,
         deletedAccounts,
       );
-      const chats = mergeChats(synced.chats, localChats, deletedAccounts);
+      const chats = mergeChats(synced.chats, filteredLocalChats, deletedAccounts);
       const response = await chrome.runtime.sendMessage({
         type: "SYNC_DATA",
         accounts,
@@ -1316,9 +1326,13 @@
 
     if (dirty) {
       await storageSet({ chats, deletedChatIds });
+      // Fix: update pendingSyncChats to the POST-purge state.
+      // Without this, pendingSyncChats still holds the pre-purge snapshot (set by the
+      // previous saveScrape call). When syncMergedData() flushes that stale payload,
+      // it re-introduces phantom entries into chrome.storage.sync — undoing this purge.
       pendingSyncAccounts = accounts;
       pendingSyncChats = chats;
-      cctLog("💾 Local storage updated with server timestamps and deletions");
+      cctLog("💾 Local storage updated with server timestamps and deletions; pendingSyncChats refreshed to post-purge state");
     } else {
       cctLog("💾 No changes — all timestamps already current");
     }
