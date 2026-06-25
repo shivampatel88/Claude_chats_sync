@@ -1235,6 +1235,36 @@ function bindEvents() {
     });
   }
 
+  // Export diagnostic log — downloads cct-diag-<ts>.json with all recorded
+  // identity decisions and chatId collision events.  Button is hidden by default
+  // and revealed only when the diag buffer contains at least one entry, keeping
+  // the UI uncluttered for normal sessions.
+  const exportDiagBtn = document.getElementById('exportDiagBtn');
+  if (exportDiagBtn && window.cctDiag) {
+    // Reveal button if there are existing entries in storage.
+    window.cctDiag.export().then((log) => {
+      if (log && log.length > 0) {
+        exportDiagBtn.style.display = '';
+      }
+    }).catch(() => {});
+
+    exportDiagBtn.addEventListener('click', async () => {
+      try {
+        const log = await window.cctDiag.export();
+        const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cct-diag-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert('Failed to export diagnostic log: ' + (err && err.message ? err.message : String(err)));
+      }
+    });
+  }
+
+
   if (confirmClearBtn && clearConfirmModal) {
     confirmClearBtn.addEventListener('click', async (e) => {
       e.stopPropagation();

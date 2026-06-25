@@ -143,13 +143,63 @@ function mergeChats(
   deletedAccountIds = [],
 ) {
   const merged = { ...baseChats };
+
+  // Build a reverse index: chatId → array of {storageId, accountId} from the
+  // base chats.  Used below to detect real-account chatId collisions before they
+  // are silently merged — the collision signature of a phantom scrape.
+  const chatIdIndex = new Map();
+  for (const [sid, chat] of Object.entries(merged)) {
+    if (!chat || !chat.chatId) continue;
+    if (!chatIdIndex.has(chat.chatId)) chatIdIndex.set(chat.chatId, []);
+    chatIdIndex.get(chat.chatId).push({ sid, accountId: chat.accountId });
+  }
+
   for (const chat of Object.values(incomingChats || {})) {
     if (!chat || !chat.storageId) continue;
     if (isAccountDeleted(chat.accountId, deletedAccounts, deletedAccountIds))
       continue;
 
+    // ── PHANTOM-SCRAPE COLLISION DETECTOR ────────────────────────────────────
+    // A chatId appearing under two different real (non-fallback) accountIds is
+    // the exact signature of a phantom scrape: identity resolved to the wrong
+    // account while the sidebar was showing another account's chats.
+    const existingEntries = chatIdIndex.get(chat.chatId) || [];
+    const realCollisions = existingEntries.filter(
+      (e) =>
+        e.sid !== chat.storageId &&
+        !e.accountId.startsWith('acc_pfl_') &&
+        !chat.accountId.startsWith('acc_pfl_'),
+    );
+    if (realCollisions.length > 0) {
+      const collisionInfo = {
+        chatId:   chat.chatId,
+        title:    chat.title,
+        incoming: { sid: chat.storageId, accountId: chat.accountId },
+        existing: realCollisions,
+      };
+      // Always log to console for dev visibility.
+      console.warn('[CCT-MERGE] ⚠️ real-account chatId collision (phantom-scrape signature):', collisionInfo);
+      // Also push to the persistent diag buffer (if loaded).
+      if (typeof window !== 'undefined' && window.cctDiag) {
+        window.cctDiag.push('chatId-collision', {
+          chatId:   chat.chatId,
+          title:    chat.title,
+          incoming: chat.accountId,
+          existing: realCollisions.map((e) => e.accountId),
+        });
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     merged[chat.storageId] = mergeChatRecords(merged[chat.storageId], chat);
+
+    // Keep the reverse index current for entries added during this loop pass.
+    if (!chatIdIndex.has(chat.chatId)) chatIdIndex.set(chat.chatId, []);
+    if (!chatIdIndex.get(chat.chatId).find((e) => e.sid === chat.storageId)) {
+      chatIdIndex.get(chat.chatId).push({ sid: chat.storageId, accountId: chat.accountId });
+    }
   }
+
   for (const chat of Object.values(merged)) {
     if (isAccountDeleted(chat.accountId, deletedAccounts, deletedAccountIds)) {
       delete merged[chat.storageId];
@@ -174,6 +224,8 @@ function mergeChats(
   //     created by the fallback→real migration window by suppressing entries whose
   //     accountId starts with "acc_pfl_" when a real-account entry for the same
   //     chatId already exists.
+  //   - Real-account collisions ARE logged and pushed to the diag buffer above
+  //     (they are never silently swallowed).
 
   return merged;
 }

@@ -35,6 +35,9 @@
       <div id="currentAccountName" class="top-account-name">Detecting...</div>
 
       <div class="clear-data-control">
+        <button id="exportDiagBtn" class="icon-button" type="button" aria-label="Export diagnostic log" title="Export diagnostic log (cct-diag.json)" style="display:none">
+          <i class="fa-solid fa-bug"></i>
+        </button>
         <button id="startClearBtn" class="icon-button danger-button" type="button" aria-label="Clear tracked data" title="Clear tracked data">
           <i class="fa-solid fa-ban" style="color: rgb(181, 24, 24);"></i>
         </button>
@@ -80,6 +83,7 @@
     <section id="chatList" class="chat-list" aria-live="polite"></section>
   </main>
 
+  <script src="../shared/diag-logger.js"></script>
   <script src="../shared/shared.js"></script>
   <div id="clearConfirmModal" class="modal-overlay" style="display: none;">
     <div class="modal-content">

@@ -1218,6 +1218,39 @@
     let titlesFixed = 0;
     let orphanedDeleted = 0;
 
+    // ── PHANTOM ENTRY PURGE ──────────────────────────────────────────────────
+    // The server's apiMap is ground truth: every chatId it returns belongs to
+    // currentAccountId's org. If local storage has that same chatId stored under
+    // a DIFFERENT real accountId, it is a phantom written by a bad scrape session
+    // where identity resolved to the wrong account. Remove it now.
+    //
+    // Safety guards:
+    //   • Only runs when currentAccountId is known (avoids purging on fallback sessions).
+    //   • Skips acc_pfl_* entries (handled by the existing fallback migration).
+    //   • Only acts on chatIds the server explicitly confirms — never guesses.
+    if (currentAccountId) {
+      const phantomStorageIds = [];
+      for (const [storageId, chat] of Object.entries(chats)) {
+        if (chat.accountId === currentAccountId) continue;       // correct entry — skip
+        if (chat.accountId.startsWith('acc_pfl_')) continue;     // fallback — skip
+        if (!apiMap.has(chat.chatId)) continue;                  // not server-confirmed — skip
+        // Server says this chatId belongs to currentAccountId, but this entry
+        // is stored under a different real accountId → phantom.
+        phantomStorageIds.push(storageId);
+        cctLog(`🧹 Phantom purge: "${chat.title}" stored under ${chat.accountId}, server confirms it belongs to ${currentAccountId} (storageId: ${storageId})`);
+      }
+      for (const sid of phantomStorageIds) {
+        delete chats[sid];
+        if (!deletedChatIds.includes(sid)) deletedChatIds.push(sid);
+        dirty = true;
+        orphanedDeleted++;
+      }
+      if (phantomStorageIds.length > 0) {
+        cctLog(`🧹 Phantom purge complete: removed ${phantomStorageIds.length} phantom entry/entries`);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     let oldestApiTs = 0;
     if (apiChats.length >= 100) {
       oldestApiTs = Math.min(...apiChats.map((c) => c.updatedAt || 0));
@@ -1596,6 +1629,37 @@
   async function saveScrape(account, chats) {
     const now = Date.now();
     const accountId = account.accountId;
+
+    // ── IDENTITY AUDIT LOG ───────────────────────────────────────────────────
+    // Logs the evidence that determined this scrape's account identity.
+    // If identitySource ever shows 'MISMATCH-cookie-vs-resolved', that is the
+    // phantom-scrape signature: resolveAccountIdentity() returned a different
+    // email than the one extracted from the cookie/DOM at init time.
+    const _identitySource = cookieDetectedEmail
+      ? (cookieDetectedEmail === account.email ? 'cookie-confirmed' : 'MISMATCH-cookie-vs-resolved')
+      : lastDetectedEmail ? 'dom-email' : 'display-name-only';
+    cctLog('🔍 saveScrape:identity', {
+      accountId,
+      email:          account.email,
+      isFallback:     account.isFallback,
+      identitySource: _identitySource,
+      cookieEmail:    cookieDetectedEmail,
+      cachedOrgId,
+      chatCount:      chats.length,
+      firstChatId:    chats[0]?.chatId ?? null,
+      ts:             Date.now(),
+    });
+    if (_identitySource === 'MISMATCH-cookie-vs-resolved' && window.cctDiag) {
+      window.cctDiag.push('identity-mismatch', {
+        accountId,
+        email:       account.email,
+        cookieEmail: cookieDetectedEmail,
+        cachedOrgId,
+        chatCount:   chats.length,
+        firstChatId: chats[0]?.chatId ?? null,
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     const localData = await storageGet(["deletedAccountIds"]);
     let localDeleted = localData.deletedAccountIds || [];
