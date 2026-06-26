@@ -345,14 +345,12 @@ function visibleChats() {
     });
   }
 
-  // Narrowed Fix 3 — display-layer backstop for the transient fallback→real migration window.
-  // During the ~2-4 s window between page load and email resolution, a scrape may write chats
-  // under profileFallbackAccountId (acc_pfl_*). Once the real identity resolves, saveScrape()
-  // migrates those entries to the real accountId. Until that migration completes, both
-  // acc_pfl_xxx:chatId and acc_real:chatId can coexist. We suppress the fallback copy here
-  // so the user sees one clean entry, not two.
+  // Legacy cleanup filter: suppress acc_pfl_* entries when a real-account entry for the
+  // same chatId already exists. acc_pfl_* entries are never written since Phase 1
+  // (accountId is now always orgId-derived), but existing users may have them in storage
+  // from before the fix. This filter is safe to delete once those entries have aged out.
   //
-  // We deliberately do NOT dedup when BOTH entries are under real accounts (no acc_pfl_ prefix):
+  // We do NOT dedup when BOTH entries are under real accounts (no acc_pfl_ prefix):
   // two genuine accounts can legitimately share a chatId (UUIDs are only namespace-unique).
   const isFallbackAccount = id => typeof id === 'string' && id.startsWith('acc_pfl_');
   const seenChatIds = new Map(); // chatId → first winning chat object
@@ -362,7 +360,7 @@ function visibleChats() {
       seenChatIds.set(chat.chatId, chat);
       return true;
     }
-    // Only suppress when one of the two is a fallback — this is the transient race state.
+    // Only suppress when one of the two is a legacy fallback entry.
     // If both are real accounts, show both entries; it is valid cross-account data.
     if (isFallbackAccount(prior.accountId) || isFallbackAccount(chat.accountId)) return false;
     return true;
@@ -904,17 +902,23 @@ async function reloadData() {
   }
   state.profileLocalId = profileLocalId;
 
+  // Load tombstones and starred IDs before merging so they filter correctly
+  state.deletedAccountIds = local.deletedAccountIds || [];
+  state.starredChatIds = new Set(Array.isArray(local.starredChatIds) ? local.starredChatIds : []);
+
   const accounts = mergeAccounts(synced.accounts, local.accounts || {}, deletedAccounts, state.deletedAccountIds);
   const chats = mergeChats(synced.chats, local.chats || {}, deletedAccounts, state.deletedAccountIds);
 
   state.accounts = accounts;
   state.chats = chats;
+  const previousCurrentAccountId = state.currentAccountId;
   state.currentAccountId = local.currentAccountId || '';
   state.syncStatus = local.syncStatus || null;
-  // BUG-03: restore tombstones so mergeAccounts() can filter deleted accounts even after popup reopens
-  state.deletedAccountIds = local.deletedAccountIds || [];
-  // Restore starred IDs as a Set so has() lookups in compareChats and makeChatItem are O(1)
-  state.starredChatIds = new Set(Array.isArray(local.starredChatIds) ? local.starredChatIds : []);
+
+  // Pivot active filter to the new current account if it was previously tracking the old current account
+  if (state.activeAccountId === previousCurrentAccountId && previousCurrentAccountId !== state.currentAccountId) {
+    state.activeAccountId = state.currentAccountId || 'all';
+  }
 
   if (state.activeAccountId !== 'all' && !state.accounts[state.activeAccountId]) {
     state.activeAccountId = 'all';
@@ -1279,7 +1283,12 @@ function bindEvents() {
         STORAGE_KEYS.accounts,
         STORAGE_KEYS.chats,
         STORAGE_KEYS.currentAccountId,
-        STORAGE_KEYS.syncStatus
+        STORAGE_KEYS.syncStatus,
+        'lastKnownEmail',
+        'lastKnownOrgId',
+        'deletedAccountIds',
+        'deletedChatIds',
+        'starredChatIds'
       ]);
       await syncRemove([SYNC_KEYS.accounts, SYNC_KEYS.meta, ...staleKeys]);
   
@@ -1290,6 +1299,8 @@ function bindEvents() {
       state.currentAccountId = '';
       state.activeAccountId = 'all';
       state.syncStatus = null;
+      state.deletedAccountIds = [];
+      state.starredChatIds = new Set();
       render();
     });
   }

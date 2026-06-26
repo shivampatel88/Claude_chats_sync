@@ -50,16 +50,9 @@
   // Fallback display name shown when Claude does not expose an email address
   const FALLBACK_ACCOUNT_NAME = "Current Claude account";
 
-  // Set during init to a value unique per Chrome profile — never shared across profiles
-  let profileFallbackAccountId = null;
   const MIN_SYNC_INTERVAL_MS = 30000;
   const PENDING_OPEN_TTL_MS = 60 * 1000;
 
-  // Phase 5: pending sync payload — populated by saveScrape(), flushed on idle/hide.
-  let pendingSyncAccounts = null;
-  let pendingSyncChats = null;
-  let idleSyncTimer = null;
-  const IDLE_SYNC_DELAY_MS = 5 * 60 * 1000; // 5 minutes of user inactivity
   const MIGRATION_DOUBLED_TITLES_V1 = "migration_doubledTitles_v1";
   // V2: re-run migration after deduplicate() was extended to title attr + span paths.
   const MIGRATION_DOUBLED_TITLES_V2 = "migration_doubledTitles_v2";
@@ -68,6 +61,8 @@
   const API_SYNC_INTERVAL_MS = 60 * 1000; // at most once per 60 s
   let cachedOrgId = null; // cached so we don't re-fetch /api/organizations every time
   let lastApiSyncAt = 0; // epoch ms of last successful API call
+  let lastFetchOrgIdAttemptAt = 0;
+  const FETCH_ORG_COOLDOWN_MS = 10000; // 10 seconds cooldown between API requests when logged out
 
   let scrapeTimer = null;
   let syncTimer = null;
@@ -75,12 +70,12 @@
   let accountObserver = null;
   let lastSnapshot = "";
   let lastSyncAt = 0;
-  let lastDetectedEmail = null; // persisted email seed so first scrape uses real identity
-  let cookieDetectedEmail = null; // email extracted from auth-cookie JWT by background worker at init
+  // cookieDetectedEmail: best-effort email for display metadata only (does NOT affect accountId).
+  let cookieDetectedEmail = null;
 
   // Gate that resolves when identity is confirmed — scrapes wait on this.
   let identityReadyResolve;
-  const identityReady = new Promise(resolve => {
+  const identityReady = new Promise((resolve) => {
     identityReadyResolve = resolve;
   });
   let warnedMissingAccount = false;
@@ -605,8 +600,6 @@
     return null;
   }
 
-  // BUG-08 fix: two-pass approach — high-confidence selectors first, then broad scan.
-  // BUG-07 fix: also check lastDetectedEmail as a seed so persisted email is used on reload.
   // Fix A: cookieDetectedEmail is checked before display-name fallback so the real identity
   //        is used from the very first scrape, even before the user opens the account menu.
   function detectAccountIdentity() {
@@ -671,43 +664,22 @@
     };
   }
 
-  async function hashValue(value) {
-    const bytes = new TextEncoder().encode(value);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
   function accountLabelFromEmail(email) {
     return email.split("@")[0] || email;
   }
 
+  // accountId is always derived from cachedOrgId (server-confirmed org UUID).
+  // orgId is fetched and awaited in initProfileLocalId() before identityReady resolves.
   async function resolveAccountIdentity(accountIdentity) {
-    if (!accountIdentity || !accountIdentity.email) {
-      // Always use the per-profile unique fallback — never read currentAccountId here.
-      // currentAccountId is a popup UI preference only and must not influence scraping identity.
-      // Using it caused chats from one Chrome profile to be attributed to another profile's account.
-      return {
-        accountId: profileFallbackAccountId,
-        email: null,
-        displayName:
-          accountIdentity && accountIdentity.displayName
-            ? accountIdentity.displayName
-            : FALLBACK_ACCOUNT_NAME,
-        isFallback: true,
-      };
-    }
+    if (!cachedOrgId) return null; // defensive: should never happen after initProfileLocalId
 
-    const accountHash = await hashValue(accountIdentity.email);
-    return {
-      accountId: `acc_${accountHash.slice(0, 16)}`,
-      email: accountIdentity.email,
-      displayName:
-        accountIdentity.displayName ||
-        accountLabelFromEmail(accountIdentity.email),
-      isFallback: false,
-    };
+    const accountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+    const email = (accountIdentity && accountIdentity.email) || null;
+    const displayName =
+      (accountIdentity && accountIdentity.displayName) ||
+      (email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME);
+
+    return { accountId, email, displayName };
   }
 
   // One-time migration: fix any doubled titles already stored in chrome.storage.local.
@@ -731,255 +703,61 @@
     }
   }
 
-  // Auto-trigger the profile dropdown to extract the email address without user interaction.
-  // Strategy:
-  //   1. Find the profile toggle button (bottom-left of sidebar).
-  //   2. Click it to open the menu — the email appears in the DOM within ~150 ms.
-  //   3. Poll for up to 1.5 s for an email to appear in the document.
-  //   4. Close the menu immediately by clicking the button again (or pressing Escape).
-  //   5. Pin the email into cookieDetectedEmail / lastDetectedEmail for the session.
-  //
-  // The open+close happens fast enough that users on a normal page load will never notice.
-  // Guard: only runs once per session (emailAutoDetectAttempted flag) and only when
-  // cookieDetectedEmail is still null after all other probes have failed.
-  let emailAutoDetectAttempted = false;
-
-  function findProfileButton() {
-    // High-confidence: look for the bottom-most visible button in aside/nav
-    // that carries a name/aria-label matching the user's display name or "open menu".
-    // Claude renders the account button at the bottom-left of the sidebar.
-    const selectors = [
-      'button[data-testid*="user"]',
-      'button[data-testid*="account"]',
-      'button[data-testid*="profile"]',
-      'button[aria-label*="account" i]',
-      'button[aria-label*="profile" i]',
-      'button[aria-haspopup="menu"]',
-      'button[aria-haspopup="true"]',
-    ];
-
-    for (const sel of selectors) {
-      const els = Array.from(document.querySelectorAll(sel)).filter(isVisible);
-      if (els.length > 0) {
-        // Prefer the bottom-most one (account button is at the bottom of the sidebar)
-        return els.sort(
-          (a, b) =>
-            b.getBoundingClientRect().top - a.getBoundingClientRect().top,
-        )[0];
-      }
-    }
-
-    // Broad fallback: bottom-most visible button in aside/nav that is NOT a chat link
-    const candidates = Array.from(
-      document.querySelectorAll("aside button, nav button"),
-    )
-      .filter(isVisible)
-      .filter((el) => !el.closest('a[href*="/chat/"]'))
-      .sort(
-        (a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top,
-      );
-
-    return candidates[0] || null;
-  }
-
-  // How many times we've attempted the auto-detect (reset on success, capped at MAX_ATTEMPTS).
-  const AUTO_DETECT_MAX_ATTEMPTS = 4;
-  let autoDetectAttemptCount = 0;
-
-  async function tryAutoDetectEmailViaDropdown() {
-    if (cookieDetectedEmail) return; // already have it
-    if (autoDetectAttemptCount >= AUTO_DETECT_MAX_ATTEMPTS) return; // give up
-    autoDetectAttemptCount++;
-    emailAutoDetectAttempted = true; // still used as a one-shot guard in setupAccountObserver
-
-    // Wait for the profile button itself to appear and stabilise.
-    // On fresh login the sidebar exists but React hasn't mounted the account component yet.
-    const btn = await new Promise((resolve) => {
-      const deadline = Date.now() + 8000;
-      const check = () => {
-        const found = findProfileButton();
-        if (found) return resolve(found);
-        if (Date.now() >= deadline) return resolve(null);
-        window.setTimeout(check, 200);
-      };
-      check();
-    });
-
-    if (!btn) {
-      cctLog(
-        "👤 Auto-detect: profile button not found after 8 s — attempt",
-        autoDetectAttemptCount,
-      );
-      scheduleAutoDetectRetry();
-      return;
-    }
-
-    cctLog(
-      "👤 Auto-detect: clicking profile button (attempt",
-      autoDetectAttemptCount,
-      ")…",
-    );
-    btn.click();
-
-    // After clicking, wait up to 3000 ms for email to appear.
-    // On a slow/freshly-loaded page the dropdown content renders asynchronously.
-    const email = await new Promise((resolve) => {
-      const deadline = Date.now() + 3000;
-      const poll = () => {
-        const found = detectAccountEmail();
-        if (found) return resolve(found);
-        if (Date.now() >= deadline) return resolve(null);
-        window.setTimeout(poll, 100);
-      };
-      poll();
-    });
-
-    // Close the menu regardless of whether we found an email.
-    btn.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await new Promise((r) => window.setTimeout(r, 150));
-    if (btn.getAttribute("aria-expanded") === "true") {
-      btn.click();
-      await new Promise((r) => window.setTimeout(r, 80));
-    }
-    if (btn.getAttribute("aria-expanded") === "true") {
-      document.body.dispatchEvent(
-        new MouseEvent("mousedown", { bubbles: true }),
-      );
-    }
-
-    if (email) {
-      cookieDetectedEmail = email;
-      lastDetectedEmail = email;
-      const attemptThatWorked = autoDetectAttemptCount;
-      autoDetectAttemptCount = 0; // reset on success
-      cctLog(
-        "✅ Auto-detect: email captured:",
-        email,
-        "(attempt",
-        attemptThatWorked,
-        ")",
-      );
-      lastSnapshot = "";
-      scheduleScrape();
-    } else {
-      cctLog(
-        "👤 Auto-detect: no email found (attempt",
-        autoDetectAttemptCount,
-        ") — will retry",
-      );
-      scheduleAutoDetectRetry();
-    }
-  }
-
-  // Retry with exponential backoff: 3 s, 8 s, 20 s after previous attempt.
-  const AUTO_DETECT_RETRY_DELAYS = [3000, 8000, 20000];
-  function scheduleAutoDetectRetry() {
-    if (cookieDetectedEmail) return;
-    if (autoDetectAttemptCount >= AUTO_DETECT_MAX_ATTEMPTS) {
-      cctLog(
-        "👤 Auto-detect: max attempts reached — giving up, DOM observer will catch manual open",
-      );
-      return;
-    }
-    const delay = AUTO_DETECT_RETRY_DELAYS[autoDetectAttemptCount - 1] || 20000;
-    cctLog("👤 Auto-detect: retry scheduled in", delay / 1000, "s");
-    window.setTimeout(() => {
-      if (!cookieDetectedEmail) tryAutoDetectEmailViaDropdown();
-    }, delay);
-  }
-
-  // Reads or generates a stable, unique seed for this Chrome profile from local storage,
-  // then derives profileFallbackAccountId from it.  Each Chrome profile gets its own seed
-  // so fallback accounts are never shared or merged across profiles via chrome.storage.sync.
-  // BUG-05 fix: use crypto.randomUUID() instead of Date.now() + Math.random() to avoid collisions.
-  // BUG-07 fix: also restore lastKnownEmail from storage so the first scrape uses real identity.
+  // init: fetch orgId (the single account discriminant) then seed email for display.
   async function initProfileLocalId() {
-    cctGroup("🚀 Init — profile & email seed");
+    cctGroup("🚀 Init");
     try {
       const data = await storageGet([
         STORAGE_KEYS.profileLocalId,
-        "lastKnownEmail",
-        "lastKnownOrgId",
+        STORAGE_KEYS.accounts,
         MIGRATION_DOUBLED_TITLES_V1,
         MIGRATION_DOUBLED_TITLES_V2,
       ]);
-      let id = data[STORAGE_KEYS.profileLocalId];
-      if (!id) {
-        id = `profile_${crypto.randomUUID()}`;
-        await storageSet({ [STORAGE_KEYS.profileLocalId]: id });
-        cctLog("🆕 New profile seed generated:", id);
-      } else {
-        cctLog("🆔 Existing profile seed loaded:", id);
-      }
-      profileFallbackAccountId = `acc_pfl_${id.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
-      cctLog("🆔 Fallback account ID:", profileFallbackAccountId);
 
-      // Change B — seed cookieDetectedEmail from persisted lastKnownEmail so the
-      // FIRST scrape (which fires ~2 s after document_idle, before the dropdown
-      // auto-detect has a chance to complete) uses the real account identity.
-      //
-      // Security gate: we only trust the seeded email if we can validate it against
-      // the live org ID BEFORE the first scrape fires. initProfileLocalId() is awaited
-      // by the init chain (see bottom of file), so this fetch completes before any
-      // scheduleScrape() call. If the org IDs don't match, the user switched accounts
-      // since last session — clear both stale values and let the dropdown detect run.
-      const storedEmail = data.lastKnownEmail;
-      const storedOrgIdForSeed = data.lastKnownOrgId;
-      if (storedEmail && storedOrgIdForSeed) {
-        // We have a stored email AND a stored orgId to validate against.
-        // Fetch the live orgId now (before scheduleScrape) to confirm they match.
-        cctLog("🔑 Validating stored email against live org ID before seeding…");
-        try {
-          const liveOrgId = await fetchOrganizationId();
-          if (liveOrgId && liveOrgId === storedOrgIdForSeed) {
-            // OrgIds match — same account as last session, seed is safe.
-            if (!cookieDetectedEmail) {
-              cookieDetectedEmail = storedEmail;
-              cctLog("🔑 Email seeded from lastKnownEmail (validated):", storedEmail);
-            }
-          } else if (liveOrgId && liveOrgId !== storedOrgIdForSeed) {
-            // OrgIds differ — account switched since last session.
-            // Clear stale values from storage so scheduleApiSync doesn't loop.
-            cctWarn(
-              `🔑 Stored email "${storedEmail}" failed org validation (stored: ${storedOrgIdForSeed}, live: ${liveOrgId}). Clearing stale identity.`,
+      // Fetch orgId first — this is the single source of truth for account identity.
+      // All scrapes are gated behind cachedOrgId being non-null.
+      cctLog("🔑 Fetching orgId…");
+      try {
+        await fetchOrganizationId(); // sets cachedOrgId as a side effect
+        if (cachedOrgId) {
+          const accountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+          cctLog("✅ orgId confirmed:", cachedOrgId, "— accountId:", accountId);
+
+          // Seed display email specifically for this account from storage
+          const localAccounts = data[STORAGE_KEYS.accounts] || {};
+          const existingAccount = localAccounts[accountId];
+          if (existingAccount && existingAccount.email) {
+            cookieDetectedEmail = existingAccount.email;
+            cctLog(
+              "📧 Email seeded from storage for display:",
+              cookieDetectedEmail,
             );
-            await storageSet({ lastKnownEmail: null, lastKnownOrgId: null });
-            // Do NOT seed cookieDetectedEmail — let dropdown auto-detect resolve it.
-          } else {
-            // liveOrgId is null — API failure or fresh install; seed optimistically,
-            // the mismatch guard in scheduleApiSync will catch it if wrong.
-            if (!cookieDetectedEmail) {
-              cookieDetectedEmail = storedEmail;
-              cctLog("🔑 Email seeded from lastKnownEmail (org fetch failed, optimistic):", storedEmail);
-            }
           }
-        } catch (orgFetchErr) {
-          // Non-fatal — seed optimistically, mismatch guard is the backstop.
-          if (!cookieDetectedEmail) {
-            cookieDetectedEmail = storedEmail;
-            cctLog("🔑 Email seeded from lastKnownEmail (org fetch error, optimistic):", storedEmail);
-          }
+        } else {
+          cctLog(
+            "⚠️ Not logged in or API error — scrapes blocked until orgId resolves.",
+          );
         }
-      } else if (storedEmail && !storedOrgIdForSeed) {
-        // Have email but no orgId to validate against — unsafe to seed.
-        // This happens on a fresh install or if a previous session never wrote orgId.
-        // Don't seed; let dropdown auto-detect run cleanly.
-        cctLog("🔑 lastKnownEmail present but no lastKnownOrgId to validate — skipping seed, letting dropdown detect run.");
+      } catch (orgErr) {
+        cctWarn("⚠️ orgId fetch failed:", orgErr && orgErr.message);
       }
-      // (If neither is stored, nothing to seed — normal fresh-install path.)
+
+      if (!cookieDetectedEmail) {
+        // One-shot passive DOM check — no button clicks, no polling.
+        const domEmail = detectAccountEmail();
+        if (domEmail) {
+          cookieDetectedEmail = domEmail;
+          cctLog("📧 Email from DOM:", domEmail);
+        }
+      }
+
+      if (!cookieDetectedEmail && cachedOrgId) {
+        const apiEmail = await fetchAccountEmailFromApi();
+        if (apiEmail) {
+          cookieDetectedEmail = apiEmail;
+          cctLog("📧 Email resolved from API:", apiEmail);
+        }
+      }
 
       if (!data[MIGRATION_DOUBLED_TITLES_V1]) {
         cctLog("🔧 Running title-dedup migration V1…");
@@ -993,20 +771,9 @@
         await storageSet({ [MIGRATION_DOUBLED_TITLES_V2]: true });
         cctLog("✅ Migration V2 done");
       }
-
-      // Silently click the profile button to expose the email in the DOM,
-      // then immediately close it.  Because cookieDetectedEmail is already seeded
-      // above (if lastKnownEmail was present), tryAutoDetectEmailViaDropdown will
-      // short-circuit immediately (its first guard is: if (cookieDetectedEmail) return)
-      // and skip the intrusive dropdown click — which is exactly the desired behaviour.
-      tryAutoDetectEmailViaDropdown();
     } catch (_error) {
-      cctError("❌ Init failed — using session-only fallback ID", _error);
-      profileFallbackAccountId = `acc_pfl_${Date.now().toString(36)}`;
+      cctError("❌ Init failed:", _error);
     } finally {
-      // ✅ Identity is as resolved as it's going to be synchronously.
-      // Scrapes may now fire. If email is still null, fallback will be used
-      // but the dropdown auto-detect will upgrade it shortly after.
       identityReadyResolve();
       cctGroupEnd();
     }
@@ -1049,40 +816,17 @@
     };
   }
 
-  // Deprecated after Phase 2: sync writes must go through the background service worker.
-  async function writeSyncedData(accounts, chats, previousChunkCount) {
-    const chunks = makeChatChunks(chats);
-    const payload = {
-      [SYNC_KEYS.accounts]: accounts,
-      [SYNC_KEYS.meta]: {
-        chatChunkCount: chunks.length,
-        updatedAt: Date.now(),
-        version: 2,
-      },
-    };
-
-    chunks.forEach((chunk, index) => {
-      payload[`${SYNC_KEYS.chatPrefix}${index}`] = chunk;
-    });
-
-    await syncSet(payload);
-
-    if (previousChunkCount > chunks.length) {
-      const staleKeys = [];
-      for (let index = chunks.length; index < previousChunkCount; index += 1) {
-        staleKeys.push(`${SYNC_KEYS.chatPrefix}${index}`);
-      }
-      await syncRemove(staleKeys);
-    }
-  }
-
   async function syncMergedData(localAccounts, localChats) {
     if (!hasSyncApi()) return;
 
     try {
       const synced = await readSyncedData();
-      const localData = await storageGet(["deletedChatIds"]);
+      const localData = await storageGet([
+        "deletedChatIds",
+        "deletedAccountIds",
+      ]);
       const deletedChatIds = localData.deletedChatIds || [];
+      const deletedAccountIds = localData.deletedAccountIds || [];
 
       // Remove deleted storageIds from the sync side.
       for (const id of deletedChatIds) {
@@ -1103,8 +847,14 @@
         synced.accounts,
         localAccounts,
         deletedAccounts,
+        deletedAccountIds,
       );
-      const chats = mergeChats(synced.chats, filteredLocalChats, deletedAccounts);
+      const chats = mergeChats(
+        synced.chats,
+        filteredLocalChats,
+        deletedAccounts,
+        deletedAccountIds,
+      );
       const response = await chrome.runtime.sendMessage({
         type: "SYNC_DATA",
         accounts,
@@ -1149,10 +899,21 @@
   // user's session cookies — no extra permissions needed.
 
   // Step 1: get (and cache) the user's organisation UUID.
-  async function fetchOrganizationId() {
-    if (cachedOrgId) {
+  async function fetchOrganizationId(bypassCache = false) {
+    if (cachedOrgId && !bypassCache) {
       cctLog("📡 Org ID (cached):", cachedOrgId);
       return cachedOrgId;
+    }
+    if (isLoginPage()) {
+      cctLog("📡 Login page — skipping org ID fetch.");
+      return null;
+    }
+    const now = Date.now();
+    if (!bypassCache && now - lastFetchOrgIdAttemptAt < FETCH_ORG_COOLDOWN_MS) {
+      return null;
+    }
+    if (!bypassCache) {
+      lastFetchOrgIdAttemptAt = now;
     }
     cctLog("📡 Fetching org ID from /api/organizations…");
     try {
@@ -1162,6 +923,9 @@
       });
       if (!res.ok) {
         cctWarn("📡 /api/organizations returned", res.status);
+        if (res.status === 403 || res.status === 401) {
+          cachedOrgId = null;
+        }
         return null;
       }
       const data = await res.json();
@@ -1175,6 +939,32 @@
       cctWarn("📡 fetchOrganizationId error:", err.message || err);
     }
     return cachedOrgId;
+  }
+
+  // Fetch user account details (like email) from Claude's internal API.
+  async function fetchAccountEmailFromApi() {
+    if (isLoginPage()) {
+      return null;
+    }
+    cctLog("📡 Fetching account email from /api/account…");
+    try {
+      const res = await fetch("https://claude.ai/api/account", {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) {
+        cctWarn("📡 /api/account returned", res.status);
+        return null;
+      }
+      const data = await res.json();
+      const email = data.email_address || data.email || null;
+      if (email && typeof email === "string") {
+        return email.toLowerCase();
+      }
+    } catch (err) {
+      cctWarn("📡 fetchAccountEmailFromApi error:", err.message || err);
+    }
+    return null;
   }
 
   // Step 2: fetch conversation list for the org, returning an array of
@@ -1217,7 +1007,11 @@
     if (!apiChats || apiChats.length === 0) return;
     if (!hasStorageApi()) return;
 
-    const local = await storageGet([STORAGE_KEYS.accounts, STORAGE_KEYS.chats, "deletedChatIds"]);
+    const local = await storageGet([
+      STORAGE_KEYS.accounts,
+      STORAGE_KEYS.chats,
+      "deletedChatIds",
+    ]);
     const accounts = local[STORAGE_KEYS.accounts] || {};
     const chats = local[STORAGE_KEYS.chats] || {};
     const deletedChatIds = local.deletedChatIds || [];
@@ -1228,38 +1022,25 @@
     let titlesFixed = 0;
     let orphanedDeleted = 0;
 
-    // ── PHANTOM ENTRY PURGE ──────────────────────────────────────────────────
-    // The server's apiMap is ground truth: every chatId it returns belongs to
-    // currentAccountId's org. If local storage has that same chatId stored under
-    // a DIFFERENT real accountId, it is a phantom written by a bad scrape session
-    // where identity resolved to the wrong account. Remove it now.
-    //
-    // Safety guards:
-    //   • Only runs when currentAccountId is known (avoids purging on fallback sessions).
-    //   • Skips acc_pfl_* entries (handled by the existing fallback migration).
-    //   • Only acts on chatIds the server explicitly confirms — never guesses.
+    // Cross-account phantom purge.
+    // The API confirms exactly which chatIds belong to currentAccountId's org.
+    // If the same chatId exists under a DIFFERENT real accountId, that entry
+    // is a phantom from a mis-attributed scrape — remove it now.
+    // Guard: only act on chatIds the API explicitly returned (apiMap.has).
+    // This cleans up existing historical duplicates; new ones cannot form
+    // because accountId is now always derived from cachedOrgId.
     if (currentAccountId) {
-      const phantomStorageIds = [];
       for (const [storageId, chat] of Object.entries(chats)) {
-        if (chat.accountId === currentAccountId) continue;       // correct entry — skip
-        if (chat.accountId.startsWith('acc_pfl_')) continue;     // fallback — skip
-        if (!apiMap.has(chat.chatId)) continue;                  // not server-confirmed — skip
-        // Server says this chatId belongs to currentAccountId, but this entry
-        // is stored under a different real accountId → phantom.
-        phantomStorageIds.push(storageId);
-        cctLog(`🧹 Phantom purge: "${chat.title}" stored under ${chat.accountId}, server confirms it belongs to ${currentAccountId} (storageId: ${storageId})`);
-      }
-      for (const sid of phantomStorageIds) {
-        delete chats[sid];
-        if (!deletedChatIds.includes(sid)) deletedChatIds.push(sid);
+        if (chat.accountId === currentAccountId) continue;
+        if (chat.accountId.startsWith('acc_pfl_')) continue;
+        if (!apiMap.has(chat.chatId)) continue;
+        cctLog(`🧹 Phantom purge: "${chat.title}" (${storageId}) confirmed belongs to ${currentAccountId}`);
+        delete chats[storageId];
+        if (!deletedChatIds.includes(storageId)) deletedChatIds.push(storageId);
         dirty = true;
         orphanedDeleted++;
       }
-      if (phantomStorageIds.length > 0) {
-        cctLog(`🧹 Phantom purge complete: removed ${phantomStorageIds.length} phantom entry/entries`);
-      }
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     let oldestApiTs = 0;
     if (apiChats.length >= 100) {
@@ -1267,20 +1048,30 @@
     }
 
     for (const [storageId, chat] of Object.entries(chats)) {
-      if (currentAccountId && chat.accountId === currentAccountId && !apiMap.has(chat.chatId)) {
+      if (
+        currentAccountId &&
+        chat.accountId === currentAccountId &&
+        !apiMap.has(chat.chatId)
+      ) {
         let shouldDelete = false;
         if (apiChats.length < 100) {
           shouldDelete = true;
         } else {
           if (chat.serverUpdatedAt && chat.serverUpdatedAt >= oldestApiTs) {
             shouldDelete = true;
-          } else if (!chat.serverUpdatedAt && chat.sectionTimestamp && chat.sectionTimestamp >= oldestApiTs) {
+          } else if (
+            !chat.serverUpdatedAt &&
+            chat.sectionTimestamp &&
+            chat.sectionTimestamp >= oldestApiTs
+          ) {
             shouldDelete = true;
           }
         }
 
         if (shouldDelete) {
-          cctLog(`🗑️ Chat deleted via API sync: "${chat.title}" (${storageId})`);
+          cctLog(
+            `🗑️ Chat deleted via API sync: "${chat.title}" (${storageId})`,
+          );
           delete chats[storageId];
           if (!deletedChatIds.includes(storageId)) {
             deletedChatIds.push(storageId);
@@ -1326,20 +1117,21 @@
 
     if (dirty) {
       await storageSet({ chats, deletedChatIds });
-      // Fix: update pendingSyncChats to the POST-purge state.
-      // Without this, pendingSyncChats still holds the pre-purge snapshot (set by the
-      // previous saveScrape call). When syncMergedData() flushes that stale payload,
-      // it re-introduces phantom entries into chrome.storage.sync — undoing this purge.
-      pendingSyncAccounts = accounts;
-      pendingSyncChats = chats;
-      cctLog("💾 Local storage updated with server timestamps and deletions; pendingSyncChats refreshed to post-purge state");
+      // Trigger a sync to push the updated state to chrome.storage.sync.
+      scheduleSync(accounts, chats);
+      cctLog("💾 Local storage updated; sync scheduled.");
     } else {
       cctLog("💾 No changes — all timestamps already current");
     }
   }
 
-  // Throttled entry point: called from runFullScrape() on every scrape that produces
-  // a change.  The 60-second guard means we never hammer Claude's API.
+  // Throttled entry point: called from saveScrape() on every scrape that produces a change.
+  // The 60-second guard means we never hammer Claude's API.
+  //
+  // Phase 2 simplification: the orgId mismatch guard is gone. accountId is now always
+  // derived from the live cachedOrgId fetched at init time, so there is no stale cached
+  // email to invalidate. If the user switches accounts, the next page load fetches a new
+  // orgId → new accountId → new storage key. No reset loop possible.
   function scheduleApiSync(accountId) {
     if (stopped) return;
     const elapsed = Date.now() - lastApiSyncAt;
@@ -1352,36 +1144,7 @@
     lastApiSyncAt = Date.now();
     cctLog("📡 API sync starting…");
 
-    // Change C — orgId mismatch safety net.
-    // fetchOrganizationId() returns the live org UUID for the currently-logged-in
-    // Claude account.  If it differs from lastKnownOrgId (written by the previous
-    // saveScrape session), the user has switched Claude accounts since last visit.
-    // In that case: invalidate the seeded email, clear the snapshot so the next
-    // scrape re-resolves identity from scratch, and abort this sync cycle.
-    // Guards: both values must be non-null — null orgId means an API failure or
-    // fresh install, not a real account switch; never trigger a reset on that.
-    fetchOrganizationId()
-      .then(async (orgId) => {
-        if (stopped) return;
-        const stored = await storageGet(["lastKnownOrgId"]);
-        const storedOrgId = stored.lastKnownOrgId || null;
-        if (storedOrgId && orgId && orgId !== storedOrgId) {
-          cctWarn(
-            `⚠️ Org ID mismatch — account switched since last session (stored: ${storedOrgId}, live: ${orgId}). Resetting identity.`,
-          );
-          cookieDetectedEmail = null;
-          lastSnapshot = "";
-          // Bug 1 fix: MUST clear lastKnownEmail and lastKnownOrgId from persistent
-          // storage here. Without this, the fallback scrape that follows has no email
-          // so saveScrape never writes lastKnownOrgId — leaving the stale value in
-          // storage. Every subsequent API sync then sees the same mismatch and resets
-          // again, creating an infinite reset loop.
-          await storageSet({ lastKnownEmail: null, lastKnownOrgId: null });
-          scheduleScrape();
-          return; // abort this sync cycle; next scrape will re-resolve identity
-        }
-        return fetchRecentChats();
-      })
+    fetchRecentChats()
       .then((apiChats) => {
         if (!stopped && apiChats) {
           applyServerTimestamps(apiChats, accountId);
@@ -1390,7 +1153,6 @@
             "📡 API sync returned no data — will retry on next scrape cycle",
           );
         }
-        // apiChats === undefined means we returned early from the mismatch branch — no-op
       })
       .catch((err) => cctWarn("📡 API sync error:", err.message || err));
   }
@@ -1627,12 +1389,9 @@
     return Array.from(byId.values());
   }
 
-  // BUG-07 fix B: include isFallback in the snapshot so that when an email is newly detected,
-  // the snapshot changes and saveScrape() is not short-circuited.
-  function makeSnapshot(accountId, chats, isFallback) {
+  function makeSnapshot(accountId, chats) {
     return JSON.stringify({
       accountId,
-      isFallback: Boolean(isFallback),
       chatIds: chats.map(
         (chat) =>
           `${chat.sidebarOrder}:${chat.chatId}:${chat.title}:${chat.sectionTimestamp || ""}`,
@@ -1643,37 +1402,9 @@
   async function saveScrape(account, chats) {
     const now = Date.now();
     const accountId = account.accountId;
-
-    // ── IDENTITY AUDIT LOG ───────────────────────────────────────────────────
-    // Logs the evidence that determined this scrape's account identity.
-    // If identitySource ever shows 'MISMATCH-cookie-vs-resolved', that is the
-    // phantom-scrape signature: resolveAccountIdentity() returned a different
-    // email than the one extracted from the cookie/DOM at init time.
-    const _identitySource = cookieDetectedEmail
-      ? (cookieDetectedEmail === account.email ? 'cookie-confirmed' : 'MISMATCH-cookie-vs-resolved')
-      : lastDetectedEmail ? 'dom-email' : 'display-name-only';
-    cctLog('🔍 saveScrape:identity', {
-      accountId,
-      email:          account.email,
-      isFallback:     account.isFallback,
-      identitySource: _identitySource,
-      cookieEmail:    cookieDetectedEmail,
-      cachedOrgId,
-      chatCount:      chats.length,
-      firstChatId:    chats[0]?.chatId ?? null,
-      ts:             Date.now(),
-    });
-    if (_identitySource === 'MISMATCH-cookie-vs-resolved' && window.cctDiag) {
-      window.cctDiag.push('identity-mismatch', {
-        accountId,
-        email:       account.email,
-        cookieEmail: cookieDetectedEmail,
-        cachedOrgId,
-        chatCount:   chats.length,
-        firstChatId: chats[0]?.chatId ?? null,
-      });
-    }
-    // ─────────────────────────────────────────────────────────────────────────
+    cctLog(
+      `🔍 saveScrape: account=${accountId} email=${account.email || "(none)"} chats=${chats.length} org=${cachedOrgId}`,
+    );
 
     const localData = await storageGet(["deletedAccountIds"]);
     let localDeleted = localData.deletedAccountIds || [];
@@ -1686,25 +1417,14 @@
       } catch (_) {}
     }
 
-    cctGroup(
-      `🔍 saveScrape — account: ${accountId} | chats: ${chats.length} | isFallback: ${account.isFallback}`,
-    );
+    cctGroup(`🔍 saveScrape — account: ${accountId} | chats: ${chats.length}`);
 
-    // Tombstone / resurrection check
-    if (
-      (localDeleted.includes(accountId) || syncedDeleted[accountId]) &&
-      !account.isFallback
-    ) {
-      cctLog(
-        "🪦→🌱 Tombstone RESURRECTION for",
-        accountId,
-        "— removing from deletedAccountIds",
-      );
-      // Remove from local deleted list
+    // Tombstone check: resurrect if the account was previously deleted.
+    // orgId-derived accountIds are server-confirmed, so we always resurrect on re-detection.
+    if (localDeleted.includes(accountId) || syncedDeleted[accountId]) {
+      cctLog("🪦→🌱 Tombstone RESURRECTION for", accountId);
       localDeleted = localDeleted.filter((id) => id !== accountId);
       await storageSet({ deletedAccountIds: localDeleted });
-
-      // Signal background to remove from sync tombstones
       if (hasSyncApi()) {
         try {
           await chrome.runtime.sendMessage({
@@ -1712,82 +1432,27 @@
             accountId,
           });
         } catch (_) {
-          /* background may be inactive; local resurrection still proceeds */
+          /* background may be inactive */
         }
       }
-      // Fall through — allow saveScrape to continue normally
-    } else if (localDeleted.includes(accountId) || syncedDeleted[accountId]) {
-      // Fallback account is tombstoned and no verified email — respect the tombstone
-      await storageSet({
-        syncStatus: {
-          ok: false,
-          updatedAt: now,
-          message:
-            "Current Claude account was deleted from tracker; scrape skipped",
-        },
-      });
-      return;
+      // Fall through — allow saveScrape to continue
     }
 
     const local = await storageGet([
       STORAGE_KEYS.accounts,
       STORAGE_KEYS.chats,
       STORAGE_KEYS.currentAccountId,
-      "lastKnownEmail",
     ]);
     const originalAccounts = local[STORAGE_KEYS.accounts] || {};
     const originalChats = local[STORAGE_KEYS.chats] || {};
     const originalCurrentAccountId = local[STORAGE_KEYS.currentAccountId] || "";
-    const originalLastKnownEmail = local.lastKnownEmail || null;
 
     const accounts = JSON.parse(JSON.stringify(originalAccounts));
     const existingChats = JSON.parse(JSON.stringify(originalChats));
 
-    const currentChatIds = new Set(chats.map((chat) => chat.chatId));
-
-    if (
-      !account.isFallback &&
-      profileFallbackAccountId &&
-      accounts[profileFallbackAccountId]
-    ) {
-      const fallbackChats = Object.values(existingChats).filter(
-        (c) => c.accountId === profileFallbackAccountId,
-      );
-      cctLog(
-        `🔄 Fallback migration: ${fallbackChats.length} chat(s) moving from ${profileFallbackAccountId} → ${accountId}`,
-      );
-      for (const chat of fallbackChats) {
-        const newStorageId = `${accountId}:${chat.chatId}`;
-        existingChats[newStorageId] = {
-          ...chat,
-          storageId: newStorageId,
-          accountId,
-        };
-        delete existingChats[chat.storageId];
-      }
-
-      // Fix B: Formally tombstone the fallback so mergeAccounts() cannot
-      // resurrect it from syncAccounts on the next sync pass.
-      if (!localDeleted.includes(profileFallbackAccountId)) {
-        cctLog("🪦 Tombstoning fallback account:", profileFallbackAccountId);
-        const updatedDeleted = [...localDeleted, profileFallbackAccountId];
-        await storageSet({ deletedAccountIds: updatedDeleted });
-        if (hasSyncApi()) {
-          try {
-            await chrome.runtime.sendMessage({
-              type: "TOMBSTONE_ACCOUNT",
-              accountId: profileFallbackAccountId,
-            });
-            cctLog(
-              "🪦 Background tombstone confirmed for",
-              profileFallbackAccountId,
-            );
-          } catch (_) {
-            cctWarn("🪦 Background tombstone message failed (non-critical)");
-          }
-        }
-      }
-    }
+    // Phase 2: fallback migration block deleted. accountId is always orgId-derived;
+    // acc_pfl_* entries are never written. Existing acc_pfl_* entries in storage
+    // remain visible in the popup until naturally evicted by sync pruning.
 
     const existingAccount = accounts[accountId] || {};
     const displayName =
@@ -1802,7 +1467,6 @@
       color: existingAccount.color || colorForAccount(accounts),
       firstSeen: existingAccount.firstSeen || now,
       lastSeen: now,
-      isFallback: account.isFallback,
       autoDetectedName: true,
     };
 
@@ -1827,61 +1491,29 @@
         // Preserve server-sourced timestamp — never overwrite with null from DOM scrape.
         serverUpdatedAt: existingChat.serverUpdatedAt || null,
       };
-
-      if (!account.isFallback) {
-        // Remove the same chat if it was previously stored under this profile's fallback ID.
-        // Safe because profileFallbackAccountId is unique per Chrome profile — it never
-        // matches another profile's fallback ID.
-        //
-        // Change A — the former "cross-account cleanup loop" that deleted any storageId
-        // sharing this chatId under a different accountId has been intentionally removed.
-        // Rationale: two genuine separate Claude accounts CAN produce the same chatId
-        // (UUIDs are only namespace-unique, not globally unique across orgs). Deleting the
-        // other account's entry on every scrape was causing permanent data loss. The
-        // fallback→real migration above (lines ~1577-1613) is the correct and safe mechanism
-        // for reclaiming chats written under profileFallbackAccountId; it is profile-scoped
-        // and cannot touch entries belonging to other real accounts.
-        delete existingChats[`${profileFallbackAccountId}:${chat.chatId}`];
-      }
     }
 
-    if (!account.isFallback && accounts[profileFallbackAccountId]) {
-      const hasFallbackChats = Object.values(existingChats).some(
-        (c) => c.accountId === profileFallbackAccountId,
-      );
-      if (!hasFallbackChats) {
-        delete accounts[profileFallbackAccountId];
-      }
-    }
-
-    // BUG-07/Fix G: persist lastKnownEmail + lastKnownOrgId together.
-    // The org ID is the reliable discriminant on next page load — if it matches,
-    // the same account is logged in and the email can be safely restored.
+    // Phase 2: lastKnownEmail write removed. Email is stored on the account object
+    // (accounts[accountId].email) and /api/account fetches it fresh at init time.
+    // A separate lastKnownEmail key is redundant and was never read for identity.
     const storagePayload = {
       accounts,
       chats: existingChats,
       [STORAGE_KEYS.currentAccountId]: accountId,
     };
-    if (account.email) {
-      storagePayload.lastKnownEmail = account.email;
-      if (cachedOrgId) storagePayload.lastKnownOrgId = cachedOrgId;
-    }
 
-    // Also persist currentAccountId so the popup "Tracking as" label always reflects
-    // the account the content script actually detected — not a guess from another profile.
     const hasChanged =
       stableStringify(originalAccounts) !== stableStringify(accounts) ||
       stableStringify(originalChats) !== stableStringify(existingChats) ||
-      originalCurrentAccountId !== accountId ||
-      (account.email && originalLastKnownEmail !== account.email);
+      originalCurrentAccountId !== accountId;
 
     if (hasChanged) {
       cctLog(
         `💾 saveScrape writing storage: ${chats.length} chat(s) for account ${accountId}`,
       );
       await storageSet(storagePayload);
-      pendingSyncAccounts = accounts;
-      pendingSyncChats = existingChats;
+      // Phase 2: direct scheduleSync call.
+      scheduleSync(accounts, existingChats);
       scheduleApiSync(accountId);
     } else {
       cctLog("💾 saveScrape: no changes detected — storage write skipped");
@@ -1891,20 +1523,71 @@
 
   async function runFullScrape() {
     if (stopped) return;
-    if (!profileFallbackAccountId) return;
 
-    // Wait for init to fully resolve identity before first scrape.
-    // This eliminates the race window where chats get written under
-    // acc_pfl_... because the orgId fetch hadn't finished yet.
+    // Wait for initProfileLocalId() to complete — which now includes the orgId fetch.
     await identityReady;
+
+    // ROOT-FIX (Change 1B): Never scrape without a confirmed orgId.
+    // If orgId is null, the user is not logged in (or the API failed).
+    if (!cachedOrgId) {
+      await fetchOrganizationId();
+      if (cachedOrgId) {
+        // Just resolved orgId! Reset lastSnapshot to force a fresh scrape write.
+        lastSnapshot = "";
+
+        // Try to restore display email from existing account details in storage
+        const local = await storageGet([STORAGE_KEYS.accounts]);
+        const localAccounts = local[STORAGE_KEYS.accounts] || {};
+        const accountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+        const existingAccount = localAccounts[accountId];
+        if (existingAccount && existingAccount.email) {
+          cookieDetectedEmail = existingAccount.email;
+          cctLog(
+            "📧 Email restored from storage for newly resolved account:",
+            cookieDetectedEmail,
+          );
+        }
+
+        if (!cookieDetectedEmail && cachedOrgId) {
+          const apiEmail = await fetchAccountEmailFromApi();
+          if (apiEmail) {
+            cookieDetectedEmail = apiEmail;
+            cctLog(
+              "📧 Email resolved from API for newly resolved account:",
+              apiEmail,
+            );
+          }
+        }
+      }
+    }
+
+    if (!cachedOrgId) {
+      cctLog(
+        "🚫 runFullScrape: no orgId confirmed — user not logged in or API error. Scrape skipped.",
+      );
+      return;
+    }
 
     await handlePendingOpen();
 
     const accountIdentity = detectAccountIdentity();
     const chats = scrapeVisibleChats();
     cctLog(
-      `🔍 Scrape: ${chats.length} chat(s) visible | identity: ${accountIdentity.email || accountIdentity.displayName || "unknown"}`,
+      `🔍 Scrape: ${chats.length} chat(s) visible | orgId: ${cachedOrgId} | email: ${accountIdentity.email || accountIdentity.displayName || "(not yet detected)"}`,
     );
+
+    if (chats.length === 0) {
+      cctLog(
+        "🔍 0 chats detected. Verifying active session before updating storage…",
+      );
+      const activeOrgId = await fetchOrganizationId(true);
+      if (!activeOrgId) {
+        cctLog(
+          "🚫 Active session lost or logged out. Scrape aborted to protect existing data.",
+        );
+        return;
+      }
+    }
 
     if (!hasStorageApi()) {
       if (!warnedStorageUnavailable) {
@@ -1916,21 +1599,29 @@
       return;
     }
 
+    // ROOT-FIX (Change 1D): resolveAccountIdentity returns null if cachedOrgId is somehow
+    // absent (defensive — Change 1B should prevent reaching here without it).
     const account = await resolveAccountIdentity(accountIdentity);
+    if (!account) {
+      cctLog(
+        "🚫 runFullScrape: resolveAccountIdentity returned null — scrape aborted.",
+      );
+      return;
+    }
+
     if (chats.length === 0 && isLoginPage()) {
       return;
     }
 
     if (!account.email && !warnedMissingAccount) {
       cctLog(
-        "🔍 No email in DOM — tracking under display name:",
-        account.displayName,
+        "🔍 No email in DOM yet — tracking under orgId-derived accountId:",
+        account.accountId,
       );
       warnedMissingAccount = true;
     }
 
-    // BUG-07 fix B: include isFallback in the snapshot so email upgrades are not blocked
-    const snapshot = makeSnapshot(account.accountId, chats, account.isFallback);
+    const snapshot = makeSnapshot(account.accountId, chats);
     if (snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
 
@@ -1995,28 +1686,6 @@
     });
   }
 
-  // Phase 5: flush pending sync payload to background worker when conditions are right.
-  function flushPendingSync() {
-    if (!pendingSyncAccounts || !pendingSyncChats) {
-      cctLog("🔄 flushPendingSync: nothing pending — skipping");
-      return;
-    }
-    cctLog("🔄 flushPendingSync: pushing to background sync…");
-    const accounts = pendingSyncAccounts;
-    const chats = pendingSyncChats;
-    pendingSyncAccounts = null;
-    pendingSyncChats = null;
-    syncMergedData(accounts, chats).catch(() => {
-      /* best-effort */
-    });
-  }
-
-  // Phase 5: reset the 5-minute idle timer on any user interaction.
-  function resetIdleSyncTimer() {
-    window.clearTimeout(idleSyncTimer);
-    idleSyncTimer = window.setTimeout(flushPendingSync, IDLE_SYNC_DELAY_MS);
-  }
-
   function setupObserver() {
     observer = new MutationObserver((mutations) => {
       if (stopped) return;
@@ -2030,33 +1699,16 @@
       subtree: true,
     });
 
-    // Phase 5: flush pending sync when tab becomes hidden (user switches tabs / minimises).
-    // Also resume scraping when tab becomes visible again.
+    // Resume scraping when tab becomes visible again after being hidden.
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        flushPendingSync();
-      } else {
+      if (!document.hidden) {
         scheduleScrape();
       }
     });
-
-    // Phase 5: idle sync — reset the 5-min timer on each meaningful user interaction.
-    document.addEventListener("pointerup", resetIdleSyncTimer, {
-      passive: true,
-    });
-    document.addEventListener("keyup", resetIdleSyncTimer, { passive: true });
-    // Seed the timer so a user who never interacts still gets a sync eventually.
-    resetIdleSyncTimer();
   }
 
-  // BUG-07 fix C: a separate observer watches for account panel DOM mutations
-  // (e.g. when the user opens their profile menu) and triggers a forced re-scrape
-  // when a new email becomes visible — even if the chat list has not changed.
-  //
-  // New bug fix: the previous version ran detectAccountEmail() on EVERY DOM mutation
-  // because characterData:true was set, causing CPU overhead from typing/scroll/render.
-  // Fixed by: (1) removing characterData:true so only structural DOM changes trigger it,
-  // (2) throttling the email check behind a 500ms timer so it runs at most twice/second.
+  // Account observer: passively captures email from DOM for display metadata.
+  // accountId is orgId-derived and unaffected by email detection.
   let accountCheckTimer = null;
   function setupAccountObserver() {
     accountObserver = new MutationObserver(() => {
@@ -2065,18 +1717,16 @@
         accountCheckTimer = null;
         if (stopped) return;
         const email = detectAccountEmail();
-        if (email && email !== lastDetectedEmail) {
-          lastDetectedEmail = email;
-          // Force a scrape regardless of snapshot — account identity just upgraded
-          lastSnapshot = "";
-          window.clearTimeout(scrapeTimer);
-          scrapeTimer = window.setTimeout(() => {
-            runFullScrape().catch((error) => {
-              if (isExtensionContextInvalidated(error)) stopTracking();
-            });
-          }, 300);
+        if (email && email !== cookieDetectedEmail) {
+          cookieDetectedEmail = email;
+          cctLog(
+            "📧 Account observer: email captured/updated for display:",
+            email,
+          );
+          lastSnapshot = ""; // Invalidate snapshot so the new email gets written to storage
+          scheduleScrape();
         }
-      }, 500); // throttle: check at most every 500ms, not on every DOM mutation
+      }, 500);
     });
 
     const root =
@@ -2095,38 +1745,38 @@
   setupObserver();
   setupAccountObserver();
 
-  // Listen for the rescrapeRequested sentinel written by the popup's "Clear" button.
-  // When the popup wipes chrome.storage.local, the DOM on the Claude tab has not changed,
-  // so runFullScrape()'s snapshot guard would silently skip the save and the popup would
-  // remain empty. Resetting lastSnapshot here forces the next scrape to write everything.
+  // Listen for rescrapeRequested (written by popup's "Clear" button) to force
+  // the next scrape to write everything even if the DOM hasn't visually changed.
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (stopped || areaName !== "local") return;
     if (changes.rescrapeRequested && changes.rescrapeRequested.newValue) {
-      lastSnapshot = ""; // invalidate cached snapshot so the next scrape is unconditional
+      lastSnapshot = ""; // reset snapshot so next scrape writes unconditionally
       scheduleScrape();
     }
   });
 
   // Handle messages from the popup
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'CCT_RESUME_INDEXING') {
+    if (message.type === "CCT_RESUME_INDEXING") {
       const { queue } = window.__cctInternal || {};
       if (queue) queue.resume();
       sendResponse({ ok: true });
       return true;
     }
-    if (message.type === 'CCT_INDEX_ACCOUNT') {
+    if (message.type === "CCT_INDEX_ACCOUNT") {
       const { indexAccount } = window.__cctInternal || {};
       if (indexAccount) {
-        indexAccount(message.accountId, message.orgId).catch(err => cctWarn("Index account failed:", err));
+        indexAccount(message.accountId, message.orgId).catch((err) =>
+          cctWarn("Index account failed:", err),
+        );
       }
       sendResponse({ ok: true });
       return true;
     }
   });
 
-  // Load (or generate) the per-profile identity seed before scheduling any scrapes.
-  // initProfileLocalId() sets profileFallbackAccountId, which runFullScrape() requires.
+  // Fetch orgId + init profile seed, then schedule the initial scrape retries.
+  // All scrapes are gated on cachedOrgId being non-null (set inside initProfileLocalId).
   initProfileLocalId().then(() => {
     for (const delay of INITIAL_RETRY_DELAYS) {
       window.setTimeout(scheduleScrape, delay);
@@ -2137,5 +1787,4 @@
   window.__cctInternal = window.__cctInternal || {};
   window.__cctInternal.fetchRecentChats = fetchRecentChats;
   window.__cctInternal.fetchOrganizationId = fetchOrganizationId;
-
 })();

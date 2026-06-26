@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("../shared/shared.js");
+importScripts("/shared/shared.js");
 
 // IMP-01: Background service worker that owns all chrome.storage.sync writes.
 // This prevents the content script and popup from racing on chunk writes when both
@@ -25,45 +25,6 @@ function mergeDeletedAccounts(base = {}, incoming = {}) {
 }
 
 const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-
-// Fix A: decode a base64url-encoded JWT payload and return the email claim, or null.
-function tryDecodeJwtEmail(value) {
-  if (!value || typeof value !== "string") return null;
-  const parts = value.split(".");
-  if (parts.length !== 3) return null;
-  try {
-    // Restore standard base64 padding that base64url strips
-    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = b64 + "==".slice(0, (4 - (b64.length % 4)) % 4);
-    const payload = JSON.parse(atob(padded));
-    if (payload.email && typeof payload.email === "string")
-      return payload.email.toLowerCase();
-    // Some providers put the email in 'sub'
-    if (
-      payload.sub &&
-      typeof payload.sub === "string" &&
-      payload.sub.includes("@")
-    ) {
-      return payload.sub.toLowerCase();
-    }
-  } catch (_) {}
-  return null;
-}
-
-// Fix A: scan auth cookies across all Claude / Anthropic domains for any JWT containing an email.
-async function extractEmailFromCookies() {
-  const domains = ["claude.ai", "anthropic.com", "auth.anthropic.com"];
-  for (const domain of domains) {
-    try {
-      const cookies = await chrome.cookies.getAll({ domain });
-      for (const cookie of cookies) {
-        const email = tryDecodeJwtEmail(cookie.value);
-        if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return email;
-      }
-    } catch (_) {}
-  }
-  return null;
-}
 
 function gcTombstones(deletedAccounts = {}, accounts = {}, chats = {}) {
   const now = Date.now();
@@ -124,6 +85,11 @@ async function readSyncedData() {
   };
 }
 
+// Phase 2: tryDecodeJwtEmail() and extractEmailFromCookies() deleted.
+// accountId is now derived from the API-confirmed orgId, not from email at all.
+// Email is fetched via /api/account in content-script.js for display metadata only.
+// The GET_ACCOUNT_EMAIL message handler has also been removed.
+
 let syncInProgress = false;
 const syncQueue = [];
 
@@ -133,25 +99,7 @@ const bgLog = (...a) => console.log(BGT, ...a);
 const bgWarn = (...a) => console.warn(BGT, ...a);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  // Fix A: GET_ACCOUNT_EMAIL — scan auth-cookie JWTs and return the user's email.
-  if (message.type === "GET_ACCOUNT_EMAIL") {
-    bgLog("🍪 GET_ACCOUNT_EMAIL: scanning cookies…");
-    extractEmailFromCookies().then(
-      (email) => {
-        bgLog(
-          email ? `🍪 Email found: ${email}` : "🍪 No JWT email in cookies",
-        );
-        sendResponse({ ok: true, email });
-      },
-      (err) => {
-        bgWarn("🍪 Cookie scan error:", err);
-        sendResponse({ ok: false, email: null });
-      },
-    );
-    return true;
-  }
-
-  // Fix B: TOMBSTONE_ACCOUNT
+  // TOMBSTONE_ACCOUNT
   if (message.type === "TOMBSTONE_ACCOUNT") {
     const { accountId } = message;
     bgLog("🪦 TOMBSTONE_ACCOUNT:", accountId);
