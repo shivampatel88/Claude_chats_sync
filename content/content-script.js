@@ -73,11 +73,10 @@
   // cookieDetectedEmail: best-effort email for display metadata only (does NOT affect accountId).
   let cookieDetectedEmail = null;
 
-  // Gate that resolves when identity is confirmed — scrapes wait on this.
-  let identityReadyResolve;
-  const identityReady = new Promise((resolve) => {
-    identityReadyResolve = resolve;
-  });
+  // Gate: true only after initProfileLocalId() confirms a fresh orgId.
+  // Reset to false on logout so the next login re-arms it.
+  let isIdentityReady = false;
+  let initInProgress = false; // prevents concurrent re-entry of initProfileLocalId
   let warnedMissingAccount = false;
   let warnedStorageUnavailable = false;
   let stopped = false;
@@ -117,6 +116,22 @@
       accountObserver.disconnect();
       accountObserver = null;
     }
+  }
+
+  // Reset all per-session identity state.
+  // Called on every confirmed logout so the next login starts with a clean slate.
+  // IMPORTANT: keep this in sync with every module-scoped variable that is
+  // identity-dependent — adding a new identity var without resetting it here
+  // is how RC-1 class bugs are born.
+  function resetSessionState() {
+    cachedOrgId = null;
+    cookieDetectedEmail = null;
+    lastSnapshot = "";
+    lastApiSyncAt = 0;
+    lastFetchOrgIdAttemptAt = 0;
+    isIdentityReady = false;
+    warnedMissingAccount = false;
+    cctLog("🔄 Session state reset — identity cleared for new login.");
   }
 
   function hasStorageApi() {
@@ -704,7 +719,12 @@
   }
 
   // init: fetch orgId (the single account discriminant) then seed email for display.
+  // May be called more than once (e.g. after re-login via setupNavigationWatcher);
+  // the initInProgress guard prevents concurrent runs.
   async function initProfileLocalId() {
+    if (initInProgress) return;
+    initInProgress = true;
+    isIdentityReady = false; // re-arm the gate while we fetch
     cctGroup("🚀 Init");
     try {
       const data = await storageGet([
@@ -774,7 +794,8 @@
     } catch (_error) {
       cctError("❌ Init failed:", _error);
     } finally {
-      identityReadyResolve();
+      isIdentityReady = true;  // unblock any scrapes waiting in the poll loop
+      initInProgress = false;
       cctGroupEnd();
     }
   }
@@ -1524,13 +1545,24 @@
   async function runFullScrape() {
     if (stopped) return;
 
-    // Wait for initProfileLocalId() to complete — which now includes the orgId fetch.
-    await identityReady;
+    // RC-3 fix: isIdentityReady is a resettable boolean (was a one-shot Promise).
+    // Poll with a 50 ms yield so we never block the JS thread while waiting for
+    // initProfileLocalId() to confirm the orgId after a re-login.
+    while (!isIdentityReady) {
+      await new Promise((r) => setTimeout(r, 50));
+      if (stopped) return;
+    }
+
+    // Snapshot the orgId at the point we enter the scrape body.
+    // RC-5 fix: if cachedOrgId shifts during the async await chain below (e.g.
+    // another logout/login fires mid-flight), we abort before saveScrape.
+    const orgIdAtScrapeStart = cachedOrgId;
 
     // ROOT-FIX (Change 1B): Never scrape without a confirmed orgId.
-    // If orgId is null, the user is not logged in (or the API failed).
+    // RC-2 fix: use bypassCache=true here so a fresh login is not blocked by
+    // the 10-second cooldown that was set when the previous user's session ended.
     if (!cachedOrgId) {
-      await fetchOrganizationId();
+      await fetchOrganizationId(true);
       if (cachedOrgId) {
         // Just resolved orgId! Reset lastSnapshot to force a fresh scrape write.
         lastSnapshot = "";
@@ -1624,6 +1656,20 @@
     const snapshot = makeSnapshot(account.accountId, chats);
     if (snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
+
+    // RC-5 fix: abort if a logout/login occurred during the async chain above.
+    // cachedOrgId could have been reset to null (logout) or to a new orgId (re-login)
+    // while we were awaiting resolveAccountIdentity or the 0-chats guard fetch.
+    if (cachedOrgId !== orgIdAtScrapeStart) {
+      cctLog(
+        "⚠️ orgId changed mid-scrape (was:",
+        orgIdAtScrapeStart,
+        "now:",
+        cachedOrgId,
+        ") — aborting to prevent mis-attribution.",
+      );
+      return;
+    }
 
     await saveScrape(account, chats);
   }
@@ -1742,8 +1788,52 @@
     });
   }
 
+  // RC-1 + RC-3 fix: watch SPA URL changes to detect logout and re-login
+  // without relying on page reloads.  Claude uses history.pushState for all
+  // navigation, so we intercept it to get zero-latency logout detection.
+  function setupNavigationWatcher() {
+    let lastPathname = location.pathname;
+
+    function onNavigate() {
+      const current = location.pathname;
+      if (current === lastPathname) return;
+
+      const wasLoggedIn  = !lastPathname.startsWith("/login");
+      const isNowLogin   =  current.startsWith("/login");
+      const wasLogin     =  lastPathname.startsWith("/login");
+      const isNowLoggedIn = !current.startsWith("/login");
+
+      if (wasLoggedIn && isNowLogin) {
+        // Navigated to /login → user just logged out.
+        cctLog("🔓 Logout detected (URL:", lastPathname, "→", current, ") — resetting session state.");
+        resetSessionState();
+      }
+
+      if (wasLogin && isNowLoggedIn) {
+        // Navigated away from /login → user just completed login.
+        cctLog("🔑 Login detected (URL:", lastPathname, "→", current, ") — re-initialising identity.");
+        // initProfileLocalId re-fetches orgId and sets isIdentityReady = true
+        // when done, which unblocks any polling runFullScrape calls.
+        initProfileLocalId().then(() => scheduleScrape());
+      }
+
+      lastPathname = current;
+    }
+
+    // Intercept history.pushState (used by Claude's SPA router).
+    const origPushState = history.pushState.bind(history);
+    history.pushState = function (...args) {
+      origPushState(...args);
+      onNavigate();
+    };
+
+    // Also handle browser back/forward navigation.
+    window.addEventListener("popstate", onNavigate);
+  }
+
   setupObserver();
   setupAccountObserver();
+  setupNavigationWatcher();
 
   // Listen for rescrapeRequested (written by popup's "Clear" button) to force
   // the next scrape to write everything even if the DOM hasn't visually changed.
