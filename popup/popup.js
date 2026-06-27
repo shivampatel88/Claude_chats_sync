@@ -1,81 +1,133 @@
-'use strict';
+"use strict";
 
-if (typeof chrome === 'undefined' || !chrome.storage) {
+if (typeof chrome === "undefined" || !chrome.storage) {
   window.chrome = {
     runtime: {
       lastError: null,
       sendMessage: (msg, cb) => {
-        if (msg && msg.type === 'SYNC_DATA') {
+        if (msg && msg.type === "SYNC_DATA") {
           setTimeout(() => cb({ ok: true, prunedCount: 0 }), 100);
         }
-      }
+      },
     },
     storage: {
       local: {
         get: (keys) => {
           return Promise.resolve({
-            currentAccountId: 'acc_1',
+            currentAccountId: "acc_1",
             accounts: {
-              'acc_1': { accountId: 'acc_1', email: 'work@company.com', displayName: 'Work Profile', color: '#4A90D9', isManual: false },
-              'acc_2': { accountId: 'acc_2', email: 'personal@gmail.com', displayName: 'Personal Profile', color: '#D9784A', isManual: false },
-              'acc_3': { accountId: 'acc_3', email: 'hobby@gmail.com', displayName: 'Hobby Projects', color: '#45A878', isManual: false }
+              acc_1: {
+                accountId: "acc_1",
+                email: "work@company.com",
+                displayName: "Work Profile",
+                color: "#4A90D9",
+                isManual: false,
+              },
+              acc_2: {
+                accountId: "acc_2",
+                email: "personal@gmail.com",
+                displayName: "Personal Profile",
+                color: "#D9784A",
+                isManual: false,
+              },
+              acc_3: {
+                accountId: "acc_3",
+                email: "hobby@gmail.com",
+                displayName: "Hobby Projects",
+                color: "#45A878",
+                isManual: false,
+              },
             },
             chats: {
-              'chat_1': { storageId: 'chat_1', chatId: '1', accountId: 'acc_1', title: 'React Performance Optimization Tips', url: 'https://claude.ai/chat/1', serverUpdatedAt: Date.now() - 5000 },
-              'chat_2': { storageId: 'chat_2', chatId: '2', accountId: 'acc_1', title: 'Rust Web Server Implementation using Axum', url: 'https://claude.ai/chat/2', serverUpdatedAt: Date.now() - 3600000 * 2 },
-              'chat_3': { storageId: 'chat_3', chatId: '3', accountId: 'acc_2', title: 'Premium Dark Theme Design System Audit', url: 'https://claude.ai/chat/3', serverUpdatedAt: Date.now() - 3600000 * 25 },
-              'chat_4': { storageId: 'chat_4', chatId: '4', accountId: 'acc_3', title: 'Weekly Groceries List & Meal Planner', url: 'https://claude.ai/chat/4', serverUpdatedAt: Date.now() - 3600000 * 24 * 5 },
-              'chat_5': { storageId: 'chat_5', chatId: '5', accountId: 'acc_1', title: 'Very Long Title that should be truncated to a single line using text-overflow ellipsis otherwise it breaks the rhythm of the list', url: 'https://claude.ai/chat/5', serverUpdatedAt: Date.now() - 100 }
+              chat_1: {
+                storageId: "chat_1",
+                chatId: "1",
+                accountId: "acc_1",
+                title: "React Performance Optimization Tips",
+                url: "https://claude.ai/chat/1",
+                serverUpdatedAt: Date.now() - 5000,
+              },
+              chat_2: {
+                storageId: "chat_2",
+                chatId: "2",
+                accountId: "acc_1",
+                title: "Rust Web Server Implementation using Axum",
+                url: "https://claude.ai/chat/2",
+                serverUpdatedAt: Date.now() - 3600000 * 2,
+              },
+              chat_3: {
+                storageId: "chat_3",
+                chatId: "3",
+                accountId: "acc_2",
+                title: "Premium Dark Theme Design System Audit",
+                url: "https://claude.ai/chat/3",
+                serverUpdatedAt: Date.now() - 3600000 * 25,
+              },
+              chat_4: {
+                storageId: "chat_4",
+                chatId: "4",
+                accountId: "acc_3",
+                title: "Weekly Groceries List & Meal Planner",
+                url: "https://claude.ai/chat/4",
+                serverUpdatedAt: Date.now() - 3600000 * 24 * 5,
+              },
+              chat_5: {
+                storageId: "chat_5",
+                chatId: "5",
+                accountId: "acc_1",
+                title:
+                  "Very Long Title that should be truncated to a single line using text-overflow ellipsis otherwise it breaks the rhythm of the list",
+                url: "https://claude.ai/chat/5",
+                serverUpdatedAt: Date.now() - 100,
+              },
             },
-            starredChatIds: ['chat_2']
+            starredChatIds: ["chat_2"],
           });
         },
         set: (vals) => Promise.resolve(),
-        remove: () => Promise.resolve()
+        remove: () => Promise.resolve(),
       },
       sync: {
         get: (keys) => {
           return Promise.resolve({
-            syncMeta: { chatChunkCount: 0 }
+            syncMeta: { chatChunkCount: 0 },
           });
         },
         set: () => Promise.resolve(),
-        remove: () => Promise.resolve()
+        remove: () => Promise.resolve(),
       },
       onChanged: {
-        addListener: () => {}
-      }
-    }
+        addListener: () => {},
+      },
+    },
   };
 }
 
 const STORAGE_KEYS = {
-  accounts: 'accounts',
-  chats: 'chats',
-  currentAccountId: 'currentAccountId',
-  syncStatus: 'syncStatus',
-  pendingOpen: 'pendingOpen'
+  accounts: "accounts",
+  chats: "chats",
+  currentAccountId: "currentAccountId",
+  syncStatus: "syncStatus",
+  pendingOpen: "pendingOpen",
 };
 
 const SYNC_KEYS = {
-  accounts: 'syncAccounts',
-  meta: 'syncMeta',
-  chatPrefix: 'syncChats_',
-  deletedAccounts: 'syncDeletedAccounts'
+  accounts: "syncAccounts",
+  meta: "syncMeta",
+  chatPrefix: "syncChats_",
+  deletedAccounts: "syncDeletedAccounts",
 };
 
 const ACCOUNT_COLORS = [
-  '#4A90D9',
-  '#D9784A',
-  '#45A878',
-  '#8D66CC',
-  '#C9A227',
-  '#2D9BA3',
-  '#C85C7A',
-  '#789A45'
+  "#4A90D9",
+  "#D9784A",
+  "#45A878",
+  "#8D66CC",
+  "#C9A227",
+  "#2D9BA3",
+  "#C85C7A",
+  "#789A45",
 ];
-
-
 
 let searchIndexHandle = null;
 let indexProgressPollTimer = null;
@@ -83,14 +135,15 @@ let indexProgressPollTimer = null;
 let state = {
   accounts: {},
   chats: {},
-  activeAccountId: 'all',
-  currentAccountId: '',
-  viewMode: 'all',
+  activeAccountId: "all",
+  currentAccountId: "",
+  viewMode: "all",
   syncStatus: null,
-  query: '',
+  query: "",
   deletedAccountIds: [], // BUG-03: tombstone IDs for accounts deleted locally but not yet confirmed in sync
   starredChatIds: new Set(), // storageId strings — starred chats always sort to top
-  profileLocalId: ''
+  profileLocalId: "",
+  allowedIndexingAccounts: [], // list of accountIds that have indexing enabled
 };
 
 // BUG-01 fix: re-entrancy guard — set to true while we are writing to chrome.storage.sync
@@ -137,30 +190,47 @@ function syncRemove(keys) {
 //   this year : "Jun 5"
 //   older     : "Jun 5, 2024"
 function formatChatDate(timestamp) {
-  if (!timestamp) return 'unknown';
+  if (!timestamp) return "unknown";
 
   const diff = Math.max(0, Date.now() - timestamp);
   const minute = 60 * 1000;
-  const hour   = 60 * minute;
+  const hour = 60 * minute;
 
   const now = new Date();
-  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const todayMidnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).getTime();
   const yesterdayMidnight = todayMidnight - 24 * hour;
 
-  if (diff < minute)      return 'just now';
-  if (diff < hour)        return `${Math.floor(diff / minute)} minutes ago`;
-  if (diff < 2 * hour)    return '1 hour ago';
-  if (diff < 24 * hour)   return `${Math.floor(diff / hour)} hours ago`;
+  if (diff < minute) return "just now";
+  if (diff < hour) return `${Math.floor(diff / minute)} minutes ago`;
+  if (diff < 2 * hour) return "1 hour ago";
+  if (diff < 24 * hour) return `${Math.floor(diff / hour)} hours ago`;
 
   if (timestamp >= yesterdayMidnight) {
-    return 'Yesterday';
+    return "Yesterday";
   }
 
   const day = 24 * hour;
-  if (diff < 7 * day)     return `${Math.floor(diff / day)} days ago`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)} days ago`;
 
   const d = new Date(timestamp);
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const sameYear = d.getFullYear() === now.getFullYear();
   return sameYear
     ? `${months[d.getMonth()]} ${d.getDate()}`
@@ -168,41 +238,41 @@ function formatChatDate(timestamp) {
 }
 
 function shortAccountName(account) {
-  return account.displayName || account.email || 'Unknown account';
+  return account.displayName || account.email || "Unknown account";
 }
 
 function currentAccountDisplay(account) {
-  if (!account) return 'Open Claude to detect automatically';
+  if (!account) return "Open Claude to detect automatically";
   return shortAccountName(account);
 }
 
 function colorForAccount(accounts) {
-  return ACCOUNT_COLORS[Object.keys(accounts || {}).length % ACCOUNT_COLORS.length];
+  return ACCOUNT_COLORS[
+    Object.keys(accounts || {}).length % ACCOUNT_COLORS.length
+  ];
 }
 
 function normalizeSearch(value) {
-  return (value || '')
+  return (value || "")
     .toString()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
 }
 
 function chatSearchText(chat) {
   const account = state.accounts[chat.accountId] || {};
-  return normalizeSearch([
-    chat.title,
-    shortAccountName(account),
-    account.email,
-    chat.url
-  ].filter(Boolean).join(' '));
+  return normalizeSearch(
+    [chat.title, shortAccountName(account), account.email, chat.url]
+      .filter(Boolean)
+      .join(" "),
+  );
 }
 
 // FLAW-03 fix: sort object keys before stringifying to get a stable representation.
 // Two semantically identical objects with different key insertion order would otherwise
 // produce different JSON strings, causing unnecessary storageSet() calls on every reloadData().
-
 
 function hasSidebarOrder(chat) {
   return Number.isFinite(chat.sidebarOrder);
@@ -225,8 +295,10 @@ function compareChats(a, b) {
   if (aStarred !== bStarred) return aStarred ? -1 : 1;
 
   const now = Date.now();
-  const aFresh = hasSidebarOrder(a) && (now - (a.orderSeenAt || 0)) < SIDEBAR_ORDER_MAX_AGE_MS;
-  const bFresh = hasSidebarOrder(b) && (now - (b.orderSeenAt || 0)) < SIDEBAR_ORDER_MAX_AGE_MS;
+  const aFresh =
+    hasSidebarOrder(a) && now - (a.orderSeenAt || 0) < SIDEBAR_ORDER_MAX_AGE_MS;
+  const bFresh =
+    hasSidebarOrder(b) && now - (b.orderSeenAt || 0) < SIDEBAR_ORDER_MAX_AGE_MS;
 
   // Same account + both fresh → trust Claude's own sidebar ordering exactly
   if (a.accountId === b.accountId && aFresh && bFresh) {
@@ -239,20 +311,26 @@ function compareChats(a, b) {
   if (aTime !== bTime) return bTime - aTime;
 
   // Tiebreakers when dates are identical:
-  if (a.accountId === b.accountId && aFresh && bFresh) return a.sidebarOrder - b.sidebarOrder;
+  if (a.accountId === b.accountId && aFresh && bFresh)
+    return a.sidebarOrder - b.sidebarOrder;
   const aLast = a.lastSeen || 0;
   const bLast = b.lastSeen || 0;
   if (aLast !== bLast) return bLast - aLast;
-  return (a.title || '').localeCompare(b.title || '');
+  return (a.title || "").localeCompare(b.title || "");
 }
 
-
-
 async function readSyncedData() {
-  const header = await syncGet([SYNC_KEYS.accounts, SYNC_KEYS.meta, SYNC_KEYS.deletedAccounts]);
+  const header = await syncGet([
+    SYNC_KEYS.accounts,
+    SYNC_KEYS.meta,
+    SYNC_KEYS.deletedAccounts,
+  ]);
   const meta = header[SYNC_KEYS.meta] || {};
   const chunkCount = Number(meta.chatChunkCount || 0);
-  const chunkKeys = Array.from({ length: chunkCount }, (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`);
+  const chunkKeys = Array.from(
+    { length: chunkCount },
+    (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`,
+  );
   const chunkData = chunkKeys.length > 0 ? await syncGet(chunkKeys) : {};
   const chats = {};
 
@@ -268,19 +346,25 @@ async function readSyncedData() {
     accounts: header[SYNC_KEYS.accounts] || {},
     chats,
     meta,
-    deletedAccounts: header[SYNC_KEYS.deletedAccounts] || {}
+    deletedAccounts: header[SYNC_KEYS.deletedAccounts] || {},
   };
 }
 
-
-
-async function writeSyncedData(accounts, chats, deletedAccounts = {}, previousChunkCount = 0) {
+async function writeSyncedData(
+  accounts,
+  chats,
+  deletedAccounts = {},
+  previousChunkCount = 0,
+) {
   void previousChunkCount;
   return await sendSyncToBackground(accounts, chats, deletedAccounts);
 }
 
-
-async function persistData({ accounts = state.accounts, chats = state.chats, currentAccountId = state.currentAccountId } = {}) {
+async function persistData({
+  accounts = state.accounts,
+  chats = state.chats,
+  currentAccountId = state.currentAccountId,
+} = {}) {
   state.accounts = accounts;
   state.chats = chats;
   state.currentAccountId = currentAccountId;
@@ -293,34 +377,52 @@ async function persistData({ accounts = state.accounts, chats = state.chats, cur
     await storageSet({
       accounts,
       chats,
-      currentAccountId
+      currentAccountId,
+      allowedIndexingAccounts: state.allowedIndexingAccounts,
     });
 
     const synced = await readSyncedData();
     const deletedAccounts = synced.deletedAccounts || {};
-    const mergedAccounts = mergeAccounts(synced.accounts, accounts, deletedAccounts, state.deletedAccountIds);
-    const mergedChats = mergeChats(synced.chats, chats, deletedAccounts, state.deletedAccountIds);
-    const response = await writeSyncedData(mergedAccounts, mergedChats, deletedAccounts, Number(synced.meta.chatChunkCount || 0));
+    const mergedAccounts = mergeAccounts(
+      synced.accounts,
+      accounts,
+      deletedAccounts,
+      state.deletedAccountIds,
+    );
+    const mergedChats = mergeChats(
+      synced.chats,
+      chats,
+      deletedAccounts,
+      state.deletedAccountIds,
+    );
+    const response = await writeSyncedData(
+      mergedAccounts,
+      mergedChats,
+      deletedAccounts,
+      Number(synced.meta.chatChunkCount || 0),
+    );
     state.accounts = mergedAccounts;
     state.chats = mergedChats;
-    const msg = (response && response.prunedCount > 0)
-      ? `Synced; ${response.prunedCount} older chats skipped from sync`
-      : 'Synced';
+    const msg =
+      response && response.prunedCount > 0
+        ? `Synced; ${response.prunedCount} older chats skipped from sync`
+        : "Synced";
     state.syncStatus = {
       ok: true,
       updatedAt: Date.now(),
-      message: msg
+      message: msg,
     };
     await storageSet({
       accounts: mergedAccounts,
       chats: mergedChats,
-      syncStatus: state.syncStatus
+      syncStatus: state.syncStatus,
+      allowedIndexingAccounts: state.allowedIndexingAccounts,
     });
   } catch (error) {
     state.syncStatus = {
       ok: false,
       updatedAt: Date.now(),
-      message: error && error.message ? error.message : String(error)
+      message: error && error.message ? error.message : String(error),
     };
     await storageSet({ syncStatus: state.syncStatus });
   } finally {
@@ -332,16 +434,16 @@ async function persistData({ accounts = state.accounts, chats = state.chats, cur
 function visibleChats() {
   let chats = Object.values(state.chats || {});
 
-  if (state.activeAccountId !== 'all') {
-    chats = chats.filter(chat => chat.accountId === state.activeAccountId);
+  if (state.activeAccountId !== "all") {
+    chats = chats.filter((chat) => chat.accountId === state.activeAccountId);
   }
 
   const query = normalizeSearch(state.query);
   if (query) {
     const terms = query.split(/\s+/).filter(Boolean);
-    chats = chats.filter(chat => {
+    chats = chats.filter((chat) => {
       const haystack = chatSearchText(chat);
-      return terms.every(term => haystack.includes(term));
+      return terms.every((term) => haystack.includes(term));
     });
   }
 
@@ -352,9 +454,10 @@ function visibleChats() {
   //
   // We do NOT dedup when BOTH entries are under real accounts (no acc_pfl_ prefix):
   // two genuine accounts can legitimately share a chatId (UUIDs are only namespace-unique).
-  const isFallbackAccount = id => typeof id === 'string' && id.startsWith('acc_pfl_');
+  const isFallbackAccount = (id) =>
+    typeof id === "string" && id.startsWith("acc_pfl_");
   const seenChatIds = new Map(); // chatId → first winning chat object
-  return chats.sort(compareChats).filter(chat => {
+  return chats.sort(compareChats).filter((chat) => {
     const prior = seenChatIds.get(chat.chatId);
     if (!prior) {
       seenChatIds.set(chat.chatId, chat);
@@ -362,7 +465,8 @@ function visibleChats() {
     }
     // Only suppress when one of the two is a legacy fallback entry.
     // If both are real accounts, show both entries; it is valid cross-account data.
-    if (isFallbackAccount(prior.accountId) || isFallbackAccount(chat.accountId)) return false;
+    if (isFallbackAccount(prior.accountId) || isFallbackAccount(chat.accountId))
+      return false;
     return true;
   });
 }
@@ -370,57 +474,65 @@ function visibleChats() {
 function renderStatus() {
   const accountCount = Object.keys(state.accounts || {}).length;
   const chatCount = Object.keys(state.chats || {}).length;
-  const accountWord = accountCount === 1 ? 'account' : 'accounts';
+  const accountWord = accountCount === 1 ? "account" : "accounts";
 
-  const statsEl = document.getElementById('statsText');
+  const statsEl = document.getElementById("statsText");
   if (statsEl) {
     statsEl.textContent = `${chatCount} chats · ${accountCount} ${accountWord}`;
   }
 
-  const container = document.getElementById('syncStatusContainer');
-  const syncTextEl = document.getElementById('syncText');
+  const container = document.getElementById("syncStatusContainer");
+  const syncTextEl = document.getElementById("syncText");
 
   if (container && syncTextEl) {
     if (state.syncStatus && state.syncStatus.ok === false) {
-      container.classList.add('has-issue');
-      syncTextEl.textContent = 'Sync issue';
+      container.classList.add("has-issue");
+      syncTextEl.textContent = "Sync issue";
 
-      let fixLink = document.getElementById('syncFixLink');
+      let fixLink = document.getElementById("syncFixLink");
       if (!fixLink) {
-        fixLink = document.createElement('a');
-        fixLink.id = 'syncFixLink';
-        fixLink.textContent = 'Fix';
-        fixLink.href = '#';
-        fixLink.addEventListener('click', (e) => {
+        fixLink = document.createElement("a");
+        fixLink.id = "syncFixLink";
+        fixLink.textContent = "Fix";
+        fixLink.href = "#";
+        fixLink.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          const errMessage = state.syncStatus && state.syncStatus.message ? state.syncStatus.message : 'Unknown sync error';
-          if (confirm(`Sync failed: "${errMessage}". Would you like to retry now?`)) {
+          const errMessage =
+            state.syncStatus && state.syncStatus.message
+              ? state.syncStatus.message
+              : "Unknown sync error";
+          if (
+            confirm(
+              `Sync failed: "${errMessage}". Would you like to retry now?`,
+            )
+          ) {
             reloadData();
           }
         });
         container.appendChild(fixLink);
       }
     } else {
-      container.classList.remove('has-issue');
-      let text = 'Synced';
-      if (syncQuotaWarning) text = 'Synced (near limit)';
+      container.classList.remove("has-issue");
+      let text = "Synced";
+      if (syncQuotaWarning) text = "Synced (near limit)";
       syncTextEl.textContent = text;
 
-      const fixLink = document.getElementById('syncFixLink');
+      const fixLink = document.getElementById("syncFixLink");
       if (fixLink) {
         fixLink.remove();
       }
     }
   }
 
-  const actionArea = document.getElementById('accountActionArea');
+  const actionArea = document.getElementById("accountActionArea");
   if (actionArea) {
-    actionArea.style.display = state.activeAccountId === 'all' ? 'none' : 'flex';
+    actionArea.style.display =
+      state.activeAccountId === "all" ? "none" : "flex";
   }
-  
+
   const account = selectedAccountForActions();
-  if (account && state.activeAccountId !== 'all') {
+  if (account && state.activeAccountId !== "all") {
     updateIndexStatusUI(account);
   } else if (indexProgressPollTimer) {
     clearInterval(indexProgressPollTimer);
@@ -429,14 +541,14 @@ function renderStatus() {
 }
 
 async function updateIndexStatusUI(account) {
-  let statusContainer = document.getElementById('indexStatusContainer');
+  let statusContainer = document.getElementById("indexStatusContainer");
   if (!statusContainer) {
-    const actionArea = document.getElementById('accountActionArea');
+    const actionArea = document.getElementById("accountActionArea");
     if (!actionArea) return;
-    statusContainer = document.createElement('div');
-    statusContainer.id = 'indexStatusContainer';
-    statusContainer.className = 'index-status';
-    const icons = document.getElementById('accountIcons');
+    statusContainer = document.createElement("div");
+    statusContainer.id = "indexStatusContainer";
+    statusContainer.className = "index-status";
+    const icons = document.getElementById("accountIcons");
     if (icons) {
       actionArea.insertBefore(statusContainer, icons);
     } else {
@@ -450,65 +562,138 @@ async function updateIndexStatusUI(account) {
   }
 
   const renderIndexStatus = async () => {
-    const local = await storageGet(['indexingQueue']);
-    const q = local.indexingQueue;
     statusContainer.replaceChildren();
 
-    if (!q || q.accountId !== account.accountId || q.status === 'idle') {
-      const btn = document.createElement('button');
-      btn.className = 'index-btn';
-      btn.textContent = 'Index';
-      btn.onclick = () => triggerIndexing(account);
-      statusContainer.appendChild(btn);
-    } else if (q.status === 'running' || q.status === 'paused-tab-hidden') {
-      const total = q.doneChatIds.length + q.pendingChatIds.length + q.failedChatIds.length;
-      statusContainer.textContent = `Indexing: ${q.doneChatIds.length}/${total}`;
+    const isEnabled = state.allowedIndexingAccounts.includes(account.accountId);
+
+    if (!isEnabled) {
+      const label = document.createElement("span");
+      label.textContent = "Search inside messages: Off";
+      label.style.marginRight = "8px";
+
+      const enableBtn = document.createElement("button");
+      enableBtn.className = "index-btn";
+      enableBtn.textContent = "Turn On";
+      enableBtn.onclick = async () => {
+        state.allowedIndexingAccounts.push(account.accountId);
+        await persistData();
+        triggerIndexing(account);
+        render();
+      };
+
+      statusContainer.append(label, enableBtn);
+      return;
+    }
+
+    const local = await storageGet(["indexingQueue"]);
+    const q = local.indexingQueue;
+
+    const statusLabel = document.createElement("span");
+    statusLabel.style.marginRight = "8px";
+
+    const disableBtn = document.createElement("button");
+    disableBtn.className = "index-btn";
+    disableBtn.textContent = "Turn Off";
+    disableBtn.onclick = async () => {
+      if (
+        confirm(
+          "Turn off message search for this account? This will delete the local search database for this account.",
+        )
+      ) {
+        state.allowedIndexingAccounts = state.allowedIndexingAccounts.filter(
+          (id) => id !== account.accountId,
+        );
+        await persistData();
+        if (window.deleteChatContentForAccount) {
+          await window.deleteChatContentForAccount(account.accountId);
+        }
+        if (q && q.accountId === account.accountId) {
+          await chrome.storage.local.remove(["indexingQueue"]);
+        }
+        if (window.buildSearchIndex) {
+          searchIndexHandle = await window.buildSearchIndex();
+        }
+        render();
+      }
+    };
+
+    if (!q || q.accountId !== account.accountId || q.status === "idle") {
+      statusLabel.textContent = "Search inside messages: Ready";
+
+      const indexBtn = document.createElement("button");
+      indexBtn.className = "index-btn";
+      indexBtn.style.marginRight = "5px";
+      indexBtn.textContent = "Scan Chats";
+      indexBtn.onclick = () => triggerIndexing(account);
+
+      statusContainer.append(statusLabel, indexBtn, disableBtn);
+    } else if (q.status === "running" || q.status === "paused-tab-hidden") {
+      const total =
+        q.doneChatIds.length + q.pendingChatIds.length + q.failedChatIds.length;
+      statusLabel.textContent = `Scanning: ${q.doneChatIds.length} of ${total} chats`;
+
+      statusContainer.append(statusLabel, disableBtn);
+
       if (!indexProgressPollTimer) {
         indexProgressPollTimer = setInterval(renderIndexStatus, 1500);
       }
-    } else if (q.status === 'paused-ratelimited') {
-      statusContainer.textContent = 'Paused (Rate limit)';
-    } else if (q.status === 'complete') {
+    } else if (q.status === "paused-ratelimited") {
+      statusLabel.textContent = "Paused (Claude rate limit)";
+      statusContainer.append(statusLabel, disableBtn);
+    } else if (q.status === "complete") {
       const d = new Date(q.startedAt || Date.now());
-      statusContainer.textContent = `Indexed ${formatChatDate(d.getTime())}`;
-      const btn = document.createElement('button');
-      btn.className = 'index-btn';
-      btn.style.marginLeft = '5px';
-      btn.textContent = 'Re-index';
-      btn.onclick = () => triggerIndexing(account);
-      statusContainer.appendChild(btn);
+      statusLabel.textContent = `Scanned ${formatChatDate(d.getTime())}`;
+
+      const reindexBtn = document.createElement("button");
+      reindexBtn.className = "index-btn";
+      reindexBtn.style.marginRight = "5px";
+      reindexBtn.textContent = "Rescan";
+      reindexBtn.onclick = () => triggerIndexing(account);
+
+      statusContainer.append(statusLabel, reindexBtn, disableBtn);
     }
   };
-  
+
   await renderIndexStatus();
 }
 
 async function triggerIndexing(account) {
-  const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*', active: true, currentWindow: true });
+  const tabs = await chrome.tabs.query({
+    url: "https://claude.ai/*",
+    active: true,
+    currentWindow: true,
+  });
   if (tabs.length === 0) {
     alert("Please open a claude.ai tab first to start indexing.");
     return;
   }
-  
-  const statusContainer = document.getElementById('indexStatusContainer');
-  if (statusContainer) statusContainer.textContent = 'Starting...';
+
+  const statusContainer = document.getElementById("indexStatusContainer");
+  if (statusContainer) statusContainer.textContent = "Starting...";
 
   // The content script will fetch the orgId if we don't have it
-  chrome.tabs.sendMessage(tabs[0].id, { 
-    type: 'CCT_INDEX_ACCOUNT', 
-    accountId: account.accountId,
-    orgId: null 
-  }).catch(() => {
-    alert("Could not reach Claude tab. Please refresh the claude.ai page and try again.");
-  });
-  
+  chrome.tabs
+    .sendMessage(tabs[0].id, {
+      type: "CCT_INDEX_ACCOUNT",
+      accountId: account.accountId,
+      orgId: null,
+    })
+    .catch(() => {
+      alert(
+        "Could not reach Claude tab. Please refresh the claude.ai page and try again.",
+      );
+    });
+
   if (!indexProgressPollTimer) {
-    indexProgressPollTimer = setInterval(() => updateIndexStatusUI(account), 1500);
+    indexProgressPollTimer = setInterval(
+      () => updateIndexStatusUI(account),
+      1500,
+    );
   }
 }
 
 function makeFilterButton(label, accountId, color) {
-  const option = document.createElement('option');
+  const option = document.createElement("option");
   option.value = accountId;
   option.textContent = label;
   if (color) option.dataset.color = color;
@@ -516,26 +701,33 @@ function makeFilterButton(label, accountId, color) {
 }
 
 function renderFilters() {
-  const filters = document.getElementById('accountFilterSelect');
+  const filters = document.getElementById("accountFilterSelect");
   filters.replaceChildren();
-  filters.appendChild(makeFilterButton('All accounts', 'all'));
+  filters.appendChild(makeFilterButton("All accounts", "all"));
 
   Object.values(state.accounts || {})
     .sort((a, b) => shortAccountName(a).localeCompare(shortAccountName(b)))
-    .forEach(account => {
-      filters.appendChild(makeFilterButton(shortAccountName(account), account.accountId, account.color));
+    .forEach((account) => {
+      filters.appendChild(
+        makeFilterButton(
+          shortAccountName(account),
+          account.accountId,
+          account.color,
+        ),
+      );
     });
 
   filters.value = state.activeAccountId;
   if (filters.value !== state.activeAccountId) {
-    state.activeAccountId = 'all';
-    filters.value = 'all';
+    state.activeAccountId = "all";
+    filters.value = "all";
   }
 }
 
 function renderCurrentAccount() {
   const currentAccount = state.accounts[state.currentAccountId];
-  document.getElementById('currentAccountName').textContent = currentAccountDisplay(currentAccount);
+  document.getElementById("currentAccountName").textContent =
+    currentAccountDisplay(currentAccount);
 }
 
 function canOpenWithoutMismatchWarning(chat) {
@@ -543,9 +735,10 @@ function canOpenWithoutMismatchWarning(chat) {
 }
 
 function selectedAccountForActions() {
-  const selectedId = state.activeAccountId !== 'all'
-    ? state.activeAccountId
-    : state.currentAccountId;
+  const selectedId =
+    state.activeAccountId !== "all"
+      ? state.activeAccountId
+      : state.currentAccountId;
   return selectedId ? state.accounts[selectedId] : null;
 }
 
@@ -559,7 +752,8 @@ async function openChat(chat) {
   if (!canOpenWithoutMismatchWarning(chat)) {
     const accountName = shortAccountName(chatAccount);
     const currentName = shortAccountName(currentAccount);
-    const message = `Switching from "${currentName}" to "${accountName}".\n\n` +
+    const message =
+      `Switching from "${currentName}" to "${accountName}".\n\n` +
       `Warning: This will clear your Claude and Anthropic session cookies, which may log out other active Claude tabs.\n\n` +
       `Do you want to continue?`;
     if (!confirm(message)) {
@@ -574,12 +768,12 @@ async function openChat(chat) {
         accountEmail: chatAccount.email || null,
         accountName,
         previousAccountName: currentName,
-        chatTitle: chat.title || 'Untitled Chat',
+        chatTitle: chat.title || "Untitled Chat",
         chatUrl: chat.url,
         createdAt: Date.now(),
         googleStarted: false,
-        loginStartedAt: null
-      }
+        loginStartedAt: null,
+      },
     });
     // Delete ALL session cookies for Claude/Anthropic before opening the tab.
     // This is the only reliable logout — URL parameters like ?from=logout are
@@ -588,17 +782,18 @@ async function openChat(chat) {
     // Layer 2: install the login_hint DNR rule so Google pre-selects the target
     // account when the OAuth redirect fires. Rule is removed after login completes.
     if (chatAccount.email) {
-      chrome.runtime.sendMessage({ type: 'SET_LOGIN_HINT', email: chatAccount.email })
+      chrome.runtime
+        .sendMessage({ type: "SET_LOGIN_HINT", email: chatAccount.email })
         .catch(() => {}); // background SW may be waking up; non-critical
     }
     // Clean login page: no active session → shows "Continue with Google" immediately.
     // The content script on that page auto-clicks the Google button and shows the toast.
-    chrome.tabs.create({ url: 'https://claude.ai/login' });
+    chrome.tabs.create({ url: "https://claude.ai/login" });
     return;
   }
 
   // No account switch needed. Clear any stale login_hint rule from a cancelled flow.
-  chrome.runtime.sendMessage({ type: 'CLEAR_LOGIN_HINT' }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "CLEAR_LOGIN_HINT" }).catch(() => {});
   await storageSet({ pendingOpen: null });
   chrome.tabs.create({ url: chat.url });
 }
@@ -612,49 +807,53 @@ async function openChat(chat) {
 // origin — so we try all plausible origins and swallow individual failures.
 async function clearClaudeSession() {
   if (!chrome.cookies) return;
-  const domains = ['claude.ai', 'anthropic.com', 'auth.anthropic.com'];
+  const domains = ["claude.ai", "anthropic.com", "auth.anthropic.com"];
   try {
     for (const domain of domains) {
       const cookies = await chrome.cookies.getAll({ domain });
-      await Promise.all(cookies.map(cookie => {
-        // Strip leading dot that Chrome prepends for domain cookies.
-        const host = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
-        // Derive root domain (last two labels: e.g. "session.claude.ai" → "claude.ai")
-        const parts = host.split('.');
-        const rootDomain = parts.length >= 2 ? parts.slice(-2).join('.') : host;
-        const path = cookie.path || '/';
+      await Promise.all(
+        cookies.map((cookie) => {
+          // Strip leading dot that Chrome prepends for domain cookies.
+          const host = cookie.domain.startsWith(".")
+            ? cookie.domain.slice(1)
+            : cookie.domain;
+          // Derive root domain (last two labels: e.g. "session.claude.ai" → "claude.ai")
+          const parts = host.split(".");
+          const rootDomain =
+            parts.length >= 2 ? parts.slice(-2).join(".") : host;
+          const path = cookie.path || "/";
 
-        // Build an exhaustive set of URL variants:
-        // • exact host with both protocols
-        // • www. prefix of root domain with both protocols
-        // This covers strict-subdomain bindings that a single URL would miss.
-        const urlVariants = [
-          `https://${host}${path}`,
-          `http://${host}${path}`,
-          `https://www.${rootDomain}${path}`,
-          `http://www.${rootDomain}${path}`
-        ];
+          // Build an exhaustive set of URL variants:
+          // • exact host with both protocols
+          // • www. prefix of root domain with both protocols
+          // This covers strict-subdomain bindings that a single URL would miss.
+          const urlVariants = [
+            `https://${host}${path}`,
+            `http://${host}${path}`,
+            `https://www.${rootDomain}${path}`,
+            `http://www.${rootDomain}${path}`,
+          ];
 
-        return Promise.all(
-          urlVariants.map(url =>
-            chrome.cookies.remove({ url, name: cookie.name }).catch(() => {})
-          )
-        );
-      }));
+          return Promise.all(
+            urlVariants.map((url) =>
+              chrome.cookies.remove({ url, name: cookie.name }).catch(() => {}),
+            ),
+          );
+        }),
+      );
     }
   } catch (err) {
-    console.warn('[Claude Chat Tracker] Could not clear session cookies:', err);
+    console.warn("[Claude Chat Tracker] Could not clear session cookies:", err);
   }
 }
 
-
 function createOpenIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('aria-hidden', 'true');
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
 
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M7 17 17 7M9 7h8v8');
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M7 17 17 7M9 7h8v8");
   svg.appendChild(path);
   return svg;
 }
@@ -663,60 +862,69 @@ function makeChatItem(chat) {
   const account = state.accounts[chat.accountId] || {};
   const isStarred = state.starredChatIds.has(chat.storageId);
 
-  const item = document.createElement('div');
-  item.className = 'chat-item';
-  item.setAttribute('role', 'button');
-  item.setAttribute('tabindex', '0');
-  item.classList.toggle('account-mismatch', !canOpenWithoutMismatchWarning(chat));
-  item.classList.toggle('is-starred', isStarred);
+  const item = document.createElement("div");
+  item.className = "chat-item";
+  item.setAttribute("role", "button");
+  item.setAttribute("tabindex", "0");
+  item.classList.toggle(
+    "account-mismatch",
+    !canOpenWithoutMismatchWarning(chat),
+  );
+  item.classList.toggle("is-starred", isStarred);
 
-  const dot = document.createElement('span');
-  dot.className = 'account-dot';
-  dot.style.background = account.color || '#888';
-  dot.title = account.email || shortAccountName(account) || 'Unknown account';
+  const dot = document.createElement("span");
+  dot.className = "account-dot";
+  dot.style.background = account.color || "#888";
+  dot.title = account.email || shortAccountName(account) || "Unknown account";
 
-  const info = document.createElement('span');
-  info.className = 'chat-info';
+  const info = document.createElement("span");
+  info.className = "chat-info";
 
-  const title = document.createElement('span');
-  title.className = 'chat-title';
-  title.textContent = chat.title || 'Untitled Chat';
+  const title = document.createElement("span");
+  title.className = "chat-title";
+  title.textContent = chat.title || "Untitled Chat";
 
-  const meta = document.createElement('span');
-  meta.className = 'chat-meta';
+  const meta = document.createElement("span");
+  meta.className = "chat-meta";
 
-  const dateSpan = document.createElement('span');
-  dateSpan.className = 'chat-date';
-  const displayTs = chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
+  const dateSpan = document.createElement("span");
+  dateSpan.className = "chat-date";
+  const displayTs =
+    chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
   dateSpan.textContent = formatChatDate(displayTs);
 
-  const badge = document.createElement('span');
-  badge.className = 'status-badge';
+  const badge = document.createElement("span");
+  badge.className = "status-badge";
   if (canOpenWithoutMismatchWarning(chat)) {
-    badge.classList.add('ready');
-    badge.textContent = 'Ready';
-    badge.title = 'Ready in current session';
+    badge.classList.add("ready");
+    badge.textContent = "Ready";
+    badge.title = "Ready in current session";
   } else {
-    badge.classList.add('switch');
+    badge.classList.add("switch");
     badge.textContent = shortAccountName(account);
     badge.title = `Switch to ${shortAccountName(account)} to open`;
   }
 
   meta.append(dateSpan, badge);
 
-  const mark = document.createElement('span');
-  mark.className = 'open-mark';
+  const mark = document.createElement("span");
+  mark.className = "open-mark";
   mark.appendChild(createOpenIcon());
-  mark.setAttribute('aria-hidden', 'true');
+  mark.setAttribute("aria-hidden", "true");
 
   if (chat._snippet) {
-    const snippetEl = document.createElement('div');
-    snippetEl.className = 'chat-snippet';
-    const escapedSnippet = chat._snippet.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const qToken = state.query.trim().split(/\s+/)[0]; 
+    const snippetEl = document.createElement("div");
+    snippetEl.className = "chat-snippet";
+    const escapedSnippet = chat._snippet
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const qToken = state.query.trim().split(/\s+/)[0];
     if (qToken && qToken.length >= 2) {
-      const regex = new RegExp(`(${qToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-      snippetEl.innerHTML = escapedSnippet.replace(regex, '<mark>$1</mark>');
+      const regex = new RegExp(
+        `(${qToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+        "gi",
+      );
+      snippetEl.innerHTML = escapedSnippet.replace(regex, "<mark>$1</mark>");
     } else {
       snippetEl.textContent = chat._snippet;
     }
@@ -726,27 +934,27 @@ function makeChatItem(chat) {
   }
 
   // Star button — sits between info and open-mark
-  const starBtn = document.createElement('button');
-  starBtn.type = 'button';
-  starBtn.className = 'star-btn';
-  starBtn.setAttribute('aria-label', isStarred ? 'Unstar chat' : 'Star chat');
-  starBtn.textContent = isStarred ? '\u2605' : '\u2606'; // ★ / ☆
-  starBtn.addEventListener('click', (e) => {
+  const starBtn = document.createElement("button");
+  starBtn.type = "button";
+  starBtn.className = "star-btn";
+  starBtn.setAttribute("aria-label", isStarred ? "Unstar chat" : "Star chat");
+  starBtn.textContent = isStarred ? "\u2605" : "\u2606"; // ★ / ☆
+  starBtn.addEventListener("click", (e) => {
     e.stopPropagation(); // don't open the chat when clicking the star
     toggleStar(chat.storageId);
   });
 
   item.append(dot, info, starBtn, mark);
   item.title = !canOpenWithoutMismatchWarning(chat)
-    ? `${chat.title || 'Untitled Chat'} - requires ${shortAccountName(account)}`
-    : chat.title || '';
-  
-  item.addEventListener('click', () => {
+    ? `${chat.title || "Untitled Chat"} - requires ${shortAccountName(account)}`
+    : chat.title || "";
+
+  item.addEventListener("click", () => {
     openChat(chat);
   });
 
-  item.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
+  item.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       openChat(chat);
     }
@@ -771,30 +979,34 @@ async function toggleStar(storageId) {
 }
 
 function getDayGroup(timestamp) {
-  if (!timestamp) return 'Earlier';
+  if (!timestamp) return "Earlier";
   const now = new Date();
-  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const todayMidnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).getTime();
   const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
-  
+
   if (timestamp >= todayMidnight) {
-    return 'Today';
+    return "Today";
   } else if (timestamp >= yesterdayMidnight) {
-    return 'Yesterday';
+    return "Yesterday";
   } else {
-    return 'Earlier';
+    return "Earlier";
   }
 }
 
 function renderChats() {
-  const list = document.getElementById('chatList');
+  const list = document.getElementById("chatList");
   let allChats = visibleChats(); // already sorted by compareChats (starred first)
-  const summary = document.getElementById('searchSummary');
+  const summary = document.getElementById("searchSummary");
 
   const queryRaw = state.query.trim();
   if (queryRaw && searchIndexHandle && window.searchContent) {
     const contentResults = window.searchContent(searchIndexHandle, queryRaw);
-    const titleMatchIds = new Set(allChats.map(c => c.storageId));
-    
+    const titleMatchIds = new Set(allChats.map((c) => c.storageId));
+
     // Merge: content matches that weren't already found by title
     for (const res of contentResults) {
       if (!titleMatchIds.has(res.storageId)) {
@@ -806,7 +1018,7 @@ function renderChats() {
         }
       } else {
         // If it WAS matched by title, also add the snippet if we have one
-        const idx = allChats.findIndex(c => c.storageId === res.storageId);
+        const idx = allChats.findIndex((c) => c.storageId === res.storageId);
         if (idx !== -1) {
           allChats[idx] = { ...allChats[idx], _snippet: res.snippet };
         }
@@ -814,39 +1026,45 @@ function renderChats() {
     }
   }
 
-  const starredChats = allChats.filter(c => state.starredChatIds.has(c.storageId));
-  const normalChats  = allChats.filter(c => !state.starredChatIds.has(c.storageId));
+  const starredChats = allChats.filter((c) =>
+    state.starredChatIds.has(c.storageId),
+  );
+  const normalChats = allChats.filter(
+    (c) => !state.starredChatIds.has(c.storageId),
+  );
 
   list.replaceChildren();
   summary.textContent = state.query.trim()
-    ? `${allChats.length} match${allChats.length === 1 ? '' : 'es'}`
-    : 'Newest first, matching Claude Recents';
+    ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}`
+    : "Newest first, matching Claude Recents";
 
   if (allChats.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = Object.keys(state.chats || {}).length === 0
-      ? 'Open Claude.ai to start tracking visible chats.'
-      : 'No chats match this view.';
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent =
+      Object.keys(state.chats || {}).length === 0
+        ? "Open Claude.ai to start tracking visible chats."
+        : "No chats match this view.";
     list.appendChild(empty);
     return;
   }
 
   function appendSectionHeader(label) {
-    const header = document.createElement('div');
-    header.className = 'section-header';
+    const header = document.createElement("div");
+    header.className = "section-header";
     header.textContent = label;
     list.appendChild(header);
   }
 
   if (starredChats.length > 0) {
-    appendSectionHeader('Starred');
-    starredChats.forEach(chat => list.appendChild(makeChatItem(chat)));
+    appendSectionHeader("Starred");
+    starredChats.forEach((chat) => list.appendChild(makeChatItem(chat)));
   }
 
   let currentGroup = null;
-  normalChats.forEach(chat => {
-    const displayTs = chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
+  normalChats.forEach((chat) => {
+    const displayTs =
+      chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
     const groupLabel = getDayGroup(displayTs);
     if (groupLabel !== currentGroup) {
       currentGroup = groupLabel;
@@ -863,13 +1081,14 @@ async function updateQuotaDisplay() {
   try {
     const used = await chrome.storage.sync.getBytesInUse(null);
     const total = chrome.storage.sync.QUOTA_BYTES || 102400;
-    const pct = Math.min(100, Math.round(used / total * 100));
-    const bar = document.getElementById('quotaBar');
-    const fill = document.getElementById('quotaFill');
+    const pct = Math.min(100, Math.round((used / total) * 100));
+    const bar = document.getElementById("quotaBar");
+    const fill = document.getElementById("quotaFill");
     if (!bar || !fill) return;
-    bar.style.display = 'block';
+    bar.style.display = "block";
     fill.style.width = `${pct}%`;
-    fill.style.background = pct > 85 ? '#D9784A' : pct > 60 ? '#C9A227' : '#45A878';
+    fill.style.background =
+      pct > 85 ? "#D9784A" : pct > 60 ? "#C9A227" : "#45A878";
     bar.title = `Sync storage: ${pct}% used (${Math.round(used / 1024)}KB / ${Math.round(total / 1024)}KB)`;
 
     // Set module-level flag; renderStatus() will include it on the NEXT render cycle
@@ -877,10 +1096,10 @@ async function updateQuotaDisplay() {
     syncQuotaWarning = pct > 85;
     // If quota state changed, trigger a status re-render so the text updates immediately
     if (wasWarning !== syncQuotaWarning) renderStatus();
-  } catch (_) { /* getBytesInUse may not be available in all environments */ }
+  } catch (_) {
+    /* getBytesInUse may not be available in all environments */
+  }
 }
-
-
 
 function render() {
   renderStatus();
@@ -896,10 +1115,12 @@ async function reloadData() {
     STORAGE_KEYS.chats,
     STORAGE_KEYS.currentAccountId,
     STORAGE_KEYS.syncStatus,
-    'deletedAccountIds', // BUG-03: load tombstones so mergeAccounts can filter them
-    'starredChatIds',     // restore per-profile starred chat pins
-    'profileLocalId'
+    "deletedAccountIds", // BUG-03: load tombstones so mergeAccounts can filter them
+    "starredChatIds", // restore per-profile starred chat pins
+    "profileLocalId",
+    "allowedIndexingAccounts",
   ]);
+  state.allowedIndexingAccounts = local.allowedIndexingAccounts || [];
   const synced = await readSyncedData();
   const deletedAccounts = synced.deletedAccounts || {};
 
@@ -912,31 +1133,51 @@ async function reloadData() {
 
   // Load tombstones and starred IDs before merging so they filter correctly
   state.deletedAccountIds = local.deletedAccountIds || [];
-  state.starredChatIds = new Set(Array.isArray(local.starredChatIds) ? local.starredChatIds : []);
+  state.starredChatIds = new Set(
+    Array.isArray(local.starredChatIds) ? local.starredChatIds : [],
+  );
 
-  const accounts = mergeAccounts(synced.accounts, local.accounts || {}, deletedAccounts, state.deletedAccountIds);
-  const chats = mergeChats(synced.chats, local.chats || {}, deletedAccounts, state.deletedAccountIds);
+  const accounts = mergeAccounts(
+    synced.accounts,
+    local.accounts || {},
+    deletedAccounts,
+    state.deletedAccountIds,
+  );
+  const chats = mergeChats(
+    synced.chats,
+    local.chats || {},
+    deletedAccounts,
+    state.deletedAccountIds,
+  );
 
   state.accounts = accounts;
   state.chats = chats;
   const previousCurrentAccountId = state.currentAccountId;
-  state.currentAccountId = local.currentAccountId || '';
+  state.currentAccountId = local.currentAccountId || "";
   state.syncStatus = local.syncStatus || null;
 
   // Pivot active filter to the new current account if it was previously tracking the old current account
-  if (state.activeAccountId === previousCurrentAccountId && previousCurrentAccountId !== state.currentAccountId) {
-    state.activeAccountId = state.currentAccountId || 'all';
+  if (
+    state.activeAccountId === previousCurrentAccountId &&
+    previousCurrentAccountId !== state.currentAccountId
+  ) {
+    state.activeAccountId = state.currentAccountId || "all";
   }
 
-  if (state.activeAccountId !== 'all' && !state.accounts[state.activeAccountId]) {
-    state.activeAccountId = 'all';
+  if (
+    state.activeAccountId !== "all" &&
+    !state.accounts[state.activeAccountId]
+  ) {
+    state.activeAccountId = "all";
   }
 
   // FLAW-03 fix: use stableStringify so key order differences don't cause spurious writes
   const shouldUpdateLocal =
-    stableStringify(local.accounts || {}) !== stableStringify(accounts)
-    || stableStringify(local.chats || {}) !== stableStringify(chats)
-    || (local.currentAccountId || '') !== state.currentAccountId;
+    stableStringify(local.accounts || {}) !== stableStringify(accounts) ||
+    stableStringify(local.chats || {}) !== stableStringify(chats) ||
+    (local.currentAccountId || "") !== state.currentAccountId ||
+    stableStringify(local.allowedIndexingAccounts || []) !==
+      stableStringify(state.allowedIndexingAccounts);
 
   if (shouldUpdateLocal) {
     // BUG-01 fix: guard the sync write so the onChanged listener (which also fires on sync area)
@@ -946,7 +1187,8 @@ async function reloadData() {
       await storageSet({
         accounts,
         chats,
-        currentAccountId: state.currentAccountId
+        currentAccountId: state.currentAccountId,
+        allowedIndexingAccounts: state.allowedIndexingAccounts,
       });
     } finally {
       isSyncing = false;
@@ -964,11 +1206,19 @@ async function reloadData() {
 }
 
 async function maybeResumeQueue() {
-  const local = await storageGet(['indexingQueue']);
+  const local = await storageGet(["indexingQueue"]);
   const q = local.indexingQueue;
-  if (!q || (q.status !== 'running' && q.status !== 'paused-tab-hidden')) return;
-  const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*', active: true, currentWindow: true });
-  if (tabs.length > 0) chrome.tabs.sendMessage(tabs[0].id, { type: 'CCT_RESUME_INDEXING' }).catch(() => {});
+  if (!q || (q.status !== "running" && q.status !== "paused-tab-hidden"))
+    return;
+  const tabs = await chrome.tabs.query({
+    url: "https://claude.ai/*",
+    active: true,
+    currentWindow: true,
+  });
+  if (tabs.length > 0)
+    chrome.tabs
+      .sendMessage(tabs[0].id, { type: "CCT_RESUME_INDEXING" })
+      .catch(() => {});
 }
 
 // IMP-01: send sync data to the background service worker rather than writing directly.
@@ -976,15 +1226,25 @@ async function maybeResumeQueue() {
 function sendSyncToBackground(accounts, chats, deletedAccounts = {}) {
   return new Promise((resolve, reject) => {
     try {
-      chrome.runtime.sendMessage({ type: 'SYNC_DATA', accounts, chats, deletedAccounts }, response => {
-        if (chrome.runtime.lastError) {
-          // Service worker not available (e.g. extension just reloaded) — caller will fall back
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (response && response.ok) resolve(response);
-        else reject(new Error(response && response.error ? response.error : 'Sync write failed'));
-      });
+      chrome.runtime.sendMessage(
+        { type: "SYNC_DATA", accounts, chats, deletedAccounts },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            // Service worker not available (e.g. extension just reloaded) — caller will fall back
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (response && response.ok) resolve(response);
+          else
+            reject(
+              new Error(
+                response && response.error
+                  ? response.error
+                  : "Sync write failed",
+              ),
+            );
+        },
+      );
     } catch (e) {
       reject(e);
     }
@@ -997,18 +1257,18 @@ let _showInlineEdit = null;
 
 async function createAccount() {
   if (!_showInlineEdit) {
-    console.warn('Account editor is unavailable');
+    console.warn("Account editor is unavailable");
     state.syncStatus = {
       ok: false,
       updatedAt: Date.now(),
-      message: 'Account editor is unavailable'
+      message: "Account editor is unavailable",
     };
     render();
     return;
   }
 
   // Route through the inline edit UI (IMP-02)
-  _showInlineEdit('', async (name) => {
+  _showInlineEdit("", async (name) => {
     const now = Date.now();
     const accountId = `manual_${now}_${Math.random().toString(36).slice(2, 8)}`;
     const account = {
@@ -1019,7 +1279,7 @@ async function createAccount() {
       firstSeen: now,
       lastSeen: now,
       isManual: true,
-      isFallback: false
+      isFallback: false,
     };
     state.accounts[accountId] = account;
     state.currentAccountId = accountId;
@@ -1029,25 +1289,27 @@ async function createAccount() {
 }
 
 function bindEvents() {
-  document.getElementById('searchInput').addEventListener('input', event => {
+  document.getElementById("searchInput").addEventListener("input", (event) => {
     state.query = event.target.value;
     renderChats();
   });
 
-  document.getElementById('accountFilterSelect').addEventListener('change', event => {
-    state.activeAccountId = event.target.value;
-    render();
-  });
+  document
+    .getElementById("accountFilterSelect")
+    .addEventListener("change", (event) => {
+      state.activeAccountId = event.target.value;
+      render();
+    });
 
-  const startDeleteBtn = document.getElementById('startDeleteBtn');
-  const deleteConfirmActions = document.getElementById('deleteConfirmActions');
-  const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
-  const cancelDeleteBtn = document.getElementById('cancelDeleteBtn');
+  const startDeleteBtn = document.getElementById("startDeleteBtn");
+  const deleteConfirmActions = document.getElementById("deleteConfirmActions");
+  const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
+  const cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
   let deleteTimeout = null;
 
   function resetDeleteState() {
-    if (startDeleteBtn) startDeleteBtn.style.display = '';
-    if (deleteConfirmActions) deleteConfirmActions.style.display = 'none';
+    if (startDeleteBtn) startDeleteBtn.style.display = "";
+    if (deleteConfirmActions) deleteConfirmActions.style.display = "none";
     if (deleteTimeout) {
       clearTimeout(deleteTimeout);
       deleteTimeout = null;
@@ -1055,10 +1317,10 @@ function bindEvents() {
   }
 
   if (startDeleteBtn) {
-    startDeleteBtn.addEventListener('click', (e) => {
+    startDeleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      startDeleteBtn.style.display = 'none';
-      deleteConfirmActions.style.display = 'flex';
+      startDeleteBtn.style.display = "none";
+      deleteConfirmActions.style.display = "flex";
       deleteTimeout = setTimeout(() => {
         resetDeleteState();
       }, 3000);
@@ -1066,28 +1328,29 @@ function bindEvents() {
   }
 
   if (cancelDeleteBtn) {
-    cancelDeleteBtn.addEventListener('click', (e) => {
+    cancelDeleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       resetDeleteState();
     });
   }
 
   if (confirmDeleteBtn) {
-    confirmDeleteBtn.addEventListener('click', async (e) => {
+    confirmDeleteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       resetDeleteState();
 
       const account = selectedAccountForActions();
       if (!account) return;
 
-      const accountChats = Object.values(state.chats || {})
-        .filter(chat => chat.accountId === account.accountId);
+      const accountChats = Object.values(state.chats || {}).filter(
+        (chat) => chat.accountId === account.accountId,
+      );
 
       // Fix 3.3: create tombstone for deleted account
       const tombstone = {
         accountId: account.accountId,
         deletedAt: Date.now(),
-        deletedByProfileId: state.profileLocalId || 'unknown'
+        deletedByProfileId: state.profileLocalId || "unknown",
       };
 
       let syncSuccess = false;
@@ -1101,32 +1364,46 @@ function bindEvents() {
 
         updatedDeletedAccounts = {
           ...(synced.deletedAccounts || {}),
-          [account.accountId]: tombstone
+          [account.accountId]: tombstone,
         };
 
         delete syncedAccounts[account.accountId];
         for (const chat of Object.values(syncedChats)) {
-          if (chat.accountId === account.accountId) delete syncedChats[chat.storageId];
+          if (chat.accountId === account.accountId)
+            delete syncedChats[chat.storageId];
         }
 
-        await writeSyncedData(syncedAccounts, syncedChats, updatedDeletedAccounts, Number(synced.meta.chatChunkCount || 0));
+        await writeSyncedData(
+          syncedAccounts,
+          syncedChats,
+          updatedDeletedAccounts,
+          Number(synced.meta.chatChunkCount || 0),
+        );
         syncSuccess = true;
       } catch (error) {
         syncError = error;
       }
 
       // Store local compatibility cache for deletedAccountIds
-      state.deletedAccountIds = [...(state.deletedAccountIds || []), account.accountId];
+      state.deletedAccountIds = [
+        ...(state.deletedAccountIds || []),
+        account.accountId,
+      ];
       await storageSet({ deletedAccountIds: state.deletedAccountIds });
 
       if (!syncSuccess) {
         state.syncStatus = {
           ok: false,
           updatedAt: Date.now(),
-          message: syncError && syncError.message ? syncError.message : String(syncError)
+          message:
+            syncError && syncError.message
+              ? syncError.message
+              : String(syncError),
         };
         await storageSet({ syncStatus: state.syncStatus });
-        alert('Delete completed locally. Cross-profile deletion will not be guaranteed until sync succeeds.');
+        alert(
+          "Delete completed locally. Cross-profile deletion will not be guaranteed until sync succeeds.",
+        );
       }
 
       // Step 2: delete from local after sync attempt
@@ -1138,12 +1415,12 @@ function bindEvents() {
         delete chats[chat.storageId];
       }
 
-      const nextAccountId = Object.keys(accounts)[0] || '';
+      const nextAccountId = Object.keys(accounts)[0] || "";
       if (state.currentAccountId === account.accountId) {
         state.currentAccountId = nextAccountId;
       }
       if (state.activeAccountId === account.accountId) {
-        state.activeAccountId = 'all';
+        state.activeAccountId = "all";
       }
 
       state.accounts = accounts;
@@ -1151,13 +1428,13 @@ function bindEvents() {
       await storageSet({
         accounts,
         chats,
-        currentAccountId: state.currentAccountId
+        currentAccountId: state.currentAccountId,
       });
-      
+
       if (window.deleteChatContentForAccount) {
         await window.deleteChatContentForAccount(account.accountId);
       }
-      
+
       // Rebuild search index after deletion
       if (window.buildSearchIndex) {
         searchIndexHandle = await window.buildSearchIndex();
@@ -1170,18 +1447,19 @@ function bindEvents() {
   // IMP-02: show an inline edit panel instead of window.prompt()
   // This avoids browser prompt() which can be blocked in extension contexts.
   function showInlineEdit(currentValue, onConfirm) {
-    const panel = document.getElementById('inlineEditPanel');
-    const input = document.getElementById('inlineEditInput');
-    const icons = document.getElementById('accountIcons');
+    const panel = document.getElementById("inlineEditPanel");
+    const input = document.getElementById("inlineEditInput");
+    const icons = document.getElementById("accountIcons");
 
-    if (!panel || !input) { // safety fallback to prompt() if DOM not ready
-      const val = prompt('Account name', currentValue || '');
+    if (!panel || !input) {
+      // safety fallback to prompt() if DOM not ready
+      const val = prompt("Account name", currentValue || "");
       if (val && val.trim()) onConfirm(val.trim());
       return;
     }
-    input.value = currentValue || '';
-    if (icons) icons.style.display = 'none';
-    panel.style.display = 'flex';
+    input.value = currentValue || "";
+    if (icons) icons.style.display = "none";
+    panel.style.display = "flex";
     input.focus();
     input.select();
 
@@ -1189,20 +1467,22 @@ function bindEvents() {
     const cleanup = () => {
       if (finished) return;
       finished = true;
-      panel.style.display = 'none';
-      if (icons) icons.style.display = '';
+      panel.style.display = "none";
+      if (icons) icons.style.display = "";
     };
 
     input.onblur = () => {
-      setTimeout(() => { cleanup(); }, 100);
+      setTimeout(() => {
+        cleanup();
+      }, 100);
     };
 
     input.onkeydown = (e) => {
-      if (e.key === 'Enter') {
+      if (e.key === "Enter") {
         const val = input.value.trim();
         cleanup();
         if (val && val !== currentValue) onConfirm(val);
-      } else if (e.key === 'Escape') {
+      } else if (e.key === "Escape") {
         cleanup();
       }
     };
@@ -1211,39 +1491,42 @@ function bindEvents() {
   // Expose showInlineEdit so createAccount() can route through the inline panel (IMP-02)
   _showInlineEdit = showInlineEdit;
 
-  const renameAccountBtn = document.getElementById('renameAccountBtn');
+  const renameAccountBtn = document.getElementById("renameAccountBtn");
   if (renameAccountBtn) {
-    renameAccountBtn.addEventListener('click', () => {
+    renameAccountBtn.addEventListener("click", () => {
       const account = selectedAccountForActions();
       if (!account) return;
       showInlineEdit(shortAccountName(account), async (nextName) => {
-        state.accounts[account.accountId] = { ...account, displayName: nextName };
+        state.accounts[account.accountId] = {
+          ...account,
+          displayName: nextName,
+        };
         await persistData();
         render();
       });
     });
   }
 
-  const closePopupBtn = document.getElementById('closePopupBtn');
+  const closePopupBtn = document.getElementById("closePopupBtn");
   if (closePopupBtn) {
-    closePopupBtn.addEventListener('click', () => {
+    closePopupBtn.addEventListener("click", () => {
       window.close();
     });
   }
 
-  const startClearBtn = document.getElementById('startClearBtn');
-  const clearConfirmModal = document.getElementById('clearConfirmModal');
-  const cancelClearBtn = document.getElementById('cancelClearBtn');
-  const confirmClearBtn = document.getElementById('confirmClearBtn');
-  
+  const startClearBtn = document.getElementById("startClearBtn");
+  const clearConfirmModal = document.getElementById("clearConfirmModal");
+  const cancelClearBtn = document.getElementById("cancelClearBtn");
+  const confirmClearBtn = document.getElementById("confirmClearBtn");
+
   if (startClearBtn && clearConfirmModal && cancelClearBtn) {
-    startClearBtn.addEventListener('click', (e) => {
+    startClearBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      clearConfirmModal.style.display = 'grid';
+      clearConfirmModal.style.display = "grid";
     });
-    cancelClearBtn.addEventListener('click', (e) => {
+    cancelClearBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      clearConfirmModal.style.display = 'none';
+      clearConfirmModal.style.display = "none";
     });
   }
 
@@ -1251,61 +1534,68 @@ function bindEvents() {
   // identity decisions and chatId collision events.  Button is hidden by default
   // and revealed only when the diag buffer contains at least one entry, keeping
   // the UI uncluttered for normal sessions.
-  const exportDiagBtn = document.getElementById('exportDiagBtn');
+  const exportDiagBtn = document.getElementById("exportDiagBtn");
   if (exportDiagBtn && window.cctDiag) {
     // Reveal button if there are existing entries in storage.
-    window.cctDiag.export().then((log) => {
-      if (log && log.length > 0) {
-        exportDiagBtn.style.display = '';
-      }
-    }).catch(() => {});
+    window.cctDiag
+      .export()
+      .then((log) => {
+        if (log && log.length > 0) {
+          exportDiagBtn.style.display = "";
+        }
+      })
+      .catch(() => {});
 
-    exportDiagBtn.addEventListener('click', async () => {
+    exportDiagBtn.addEventListener("click", async () => {
       try {
         const log = await window.cctDiag.export();
-        const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(log, null, 2)], {
+          type: "application/json",
+        });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = url;
         a.download = `cct-diag-${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
       } catch (err) {
-        alert('Failed to export diagnostic log: ' + (err && err.message ? err.message : String(err)));
+        alert(
+          "Failed to export diagnostic log: " +
+            (err && err.message ? err.message : String(err)),
+        );
       }
     });
   }
 
-
   if (confirmClearBtn && clearConfirmModal) {
-    confirmClearBtn.addEventListener('click', async (e) => {
+    confirmClearBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      clearConfirmModal.style.display = 'none';
-      
+      clearConfirmModal.style.display = "none";
+
       const synced = await readSyncedData();
       const staleKeys = Array.from(
         { length: Number(synced.meta.chatChunkCount || 0) },
-        (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`
+        (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`,
       );
       await chrome.storage.local.remove([
         STORAGE_KEYS.accounts,
         STORAGE_KEYS.chats,
         STORAGE_KEYS.currentAccountId,
         STORAGE_KEYS.syncStatus,
-        'lastKnownEmail',
-        'lastKnownOrgId',
-        'deletedAccountIds',
-        'deletedChatIds',
-        'starredChatIds'
+        "lastKnownEmail",
+        "lastKnownOrgId",
+        "deletedAccountIds",
+        "deletedChatIds",
+        "starredChatIds",
       ]);
       await syncRemove([SYNC_KEYS.accounts, SYNC_KEYS.meta, ...staleKeys]);
-  
+
       await storageSet({ rescrapeRequested: Date.now() });
-  
+
       state.accounts = {};
       state.chats = {};
-      state.currentAccountId = '';
-      state.activeAccountId = 'all';
+      state.currentAccountId = "";
+      state.activeAccountId = "all";
       state.syncStatus = null;
       state.deletedAccountIds = [];
       state.starredChatIds = new Set();
@@ -1319,14 +1609,19 @@ function bindEvents() {
   // The popup does not need to react to sync area changes; the content script owns sync writes.
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (isSyncing) return; // block re-entrant reloads triggered by our own sync write
-    if (areaName !== 'local') return; // only react to local writes from the content script
-    if (changes.accounts || changes.chats || changes.currentAccountId || changes.syncStatus) {
+    if (areaName !== "local") return; // only react to local writes from the content script
+    if (
+      changes.accounts ||
+      changes.chats ||
+      changes.currentAccountId ||
+      changes.syncStatus
+    ) {
       reloadData();
     }
   });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   reloadData();
 });
