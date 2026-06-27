@@ -585,12 +585,20 @@ async function openChat(chat) {
     // This is the only reliable logout — URL parameters like ?from=logout are
     // ignored by Claude's server; it just redirects the still-logged-in user back.
     await clearClaudeSession();
+    // Layer 2: install the login_hint DNR rule so Google pre-selects the target
+    // account when the OAuth redirect fires. Rule is removed after login completes.
+    if (chatAccount.email) {
+      chrome.runtime.sendMessage({ type: 'SET_LOGIN_HINT', email: chatAccount.email })
+        .catch(() => {}); // background SW may be waking up; non-critical
+    }
     // Clean login page: no active session → shows "Continue with Google" immediately.
     // The content script on that page auto-clicks the Google button and shows the toast.
     chrome.tabs.create({ url: 'https://claude.ai/login' });
     return;
   }
 
+  // No account switch needed. Clear any stale login_hint rule from a cancelled flow.
+  chrome.runtime.sendMessage({ type: 'CLEAR_LOGIN_HINT' }).catch(() => {});
   await storageSet({ pendingOpen: null });
   chrome.tabs.create({ url: chat.url });
 }

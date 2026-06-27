@@ -98,6 +98,64 @@ const BGT = "[CCT-BG]";
 const bgLog = (...a) => console.log(BGT, ...a);
 const bgWarn = (...a) => console.warn(BGT, ...a);
 
+// ─── declarativeNetRequest: login_hint injection ──────────────────────────────
+// When the user switches accounts, we register a dynamic DNR rule that appends
+// login_hint=<email> to the Google OAuth URL. This causes Google to pre-select
+// the right account on the chooser screen (or skip the chooser entirely).
+// The rule is removed immediately after login completes or is cancelled.
+const LOGIN_HINT_RULE_ID = 1001; // arbitrary stable ID for our single dynamic rule
+
+async function setLoginHintRule(email) {
+  if (!email || typeof chrome.declarativeNetRequest === "undefined") return;
+  try {
+    // Remove any existing rule first (idempotent).
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [LOGIN_HINT_RULE_ID],
+    });
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      addRules: [
+        {
+          id: LOGIN_HINT_RULE_ID,
+          priority: 1,
+          action: {
+            type: "redirect",
+            redirect: {
+              transform: {
+                queryTransform: {
+                  addOrReplaceParams: [{ key: "login_hint", value: email }],
+                },
+              },
+            },
+          },
+          condition: {
+            // Matches both the v2 and legacy Google OAuth endpoints.
+            urlFilter: "||accounts.google.com/o/oauth2/",
+            resourceTypes: ["main_frame", "sub_frame"],
+          },
+        },
+      ],
+    });
+    bgLog("🔑 login_hint rule set for:", email);
+  } catch (err) {
+    bgWarn("⚠️ setLoginHintRule error:", err && err.message);
+  }
+}
+
+async function clearLoginHintRule() {
+  if (typeof chrome.declarativeNetRequest === "undefined") return;
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [LOGIN_HINT_RULE_ID],
+    });
+    bgLog("🔑 login_hint rule cleared.");
+  } catch (err) {
+    bgWarn("⚠️ clearLoginHintRule error:", err && err.message);
+  }
+}
+
+// Clear any stale login_hint rule left from a previous session.
+clearLoginHintRule();
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // TOMBSTONE_ACCOUNT
   if (message.type === "TOMBSTONE_ACCOUNT") {
@@ -154,6 +212,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           error: err && err.message ? err.message : String(err),
         });
       }
+    })();
+    return true;
+  }
+
+  // SET_LOGIN_HINT: install a declarativeNetRequest rule to inject login_hint
+  // into the Google OAuth redirect URL before the browser navigates to accounts.google.com.
+  if (message.type === "SET_LOGIN_HINT") {
+    const { email } = message;
+    bgLog("🔑 SET_LOGIN_HINT:", email);
+    (async () => {
+      await setLoginHintRule(email);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  // CLEAR_LOGIN_HINT: remove the declarativeNetRequest rule (login complete or cancelled).
+  if (message.type === "CLEAR_LOGIN_HINT") {
+    bgLog("🔑 CLEAR_LOGIN_HINT");
+    (async () => {
+      await clearLoginHintRule();
+      sendResponse({ ok: true });
     })();
     return true;
   }

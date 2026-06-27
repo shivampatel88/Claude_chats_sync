@@ -264,6 +264,8 @@
     removePendingToast();
     window.clearTimeout(pendingNavigationTimer);
     pendingNavigationScheduled = false;
+    // Remove the login_hint DNR rule now that the flow is complete or cancelled.
+    chrome.runtime.sendMessage({ type: "CLEAR_LOGIN_HINT" }).catch(() => {});
   }
 
   function sameClaudeChatUrl(a, b) {
@@ -379,6 +381,17 @@
   function makePendingToast(pendingOpen) {
     removePendingToast();
 
+    const email = pendingOpen.accountEmail || null;
+
+    // Inject a one-time keyframe for the pulse animation on the CTA button.
+    if (!document.getElementById("cct-keyframes")) {
+      const style = document.createElement("style");
+      style.id = "cct-keyframes";
+      style.textContent =
+        "@keyframes cct-pulse{0%,100%{box-shadow:0 0 0 0 rgba(217,121,69,.5)}50%{box-shadow:0 0 0 6px rgba(217,121,69,0)}}";
+      document.head.appendChild(style);
+    }
+
     const toast = document.createElement("div");
     toast.id = "claude-chat-tracker-toast";
     toast.style.cssText = [
@@ -405,32 +418,55 @@
     message.style.minWidth = "0";
 
     const title = document.createElement("div");
-    title.textContent = `Switch to "${pendingOpen.accountName}" — logging in…`;
+    if (isLoginPage() && email) {
+      title.innerHTML = `Signing in as <span style="color:#f4a261;font-weight:800;letter-spacing:.01em">${email}</span>…`;
+    } else {
+      title.textContent = `Switch to "${pendingOpen.accountName}" — logging in…`;
+    }
     title.style.cssText =
       "font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
 
     const detail = document.createElement("div");
-    detail.textContent = isLoginPage()
-      ? `Select "${pendingOpen.accountName}" on the Google screen. Target: ${pendingOpen.chatTitle}`
-      : `Opening: ${pendingOpen.chatTitle}`;
+    if (isLoginPage()) {
+      if (email) {
+        detail.textContent = "We'll sign you in automatically — one click away";
+      } else {
+        detail.textContent = `Select "${pendingOpen.accountName}" on the Google screen`;
+      }
+    } else {
+      detail.textContent = `Opening: ${pendingOpen.chatTitle}`;
+    }
     detail.style.cssText =
       "color:#b8b0a7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px";
 
     const openButton = document.createElement("button");
     openButton.type = "button";
     openButton.textContent = isLoginPage() ? "Start login" : "Open now";
-    openButton.style.cssText =
-      "height:30px;border:1px solid #6d5a4b;border-radius:8px;background:#2a2420;color:#f4f1ea;padding:0 10px;cursor:pointer;font:inherit;font-size:12px";
-    openButton.addEventListener("click", async () => {
+    // On the login page, make the button a pulsing primary CTA so the user
+    // knows exactly what to click (one tap = done).
+    openButton.style.cssText = isLoginPage()
+      ? "height:30px;border:none;border-radius:8px;background:#d97945;color:#fff;padding:0 14px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;animation:cct-pulse 1.8s ease-in-out infinite"
+      : "height:30px;border:1px solid #6d5a4b;border-radius:8px;background:#2a2420;color:#f4f1ea;padding:0 10px;cursor:pointer;font:inherit;font-size:12px";
+
+    openButton.addEventListener("click", () => {
       if (isLoginPage()) {
-        const button = findGoogleSignInElement();
-        if (button) {
-          await setPendingOpen({
+        const googleBtn = findGoogleSignInElement();
+        if (googleBtn) {
+          // CRITICAL: click the Google button FIRST — this is the real user gesture.
+          // Chrome's popup blocker allows window.open() only from synchronous user
+          // gesture handlers. We must NOT await anything before clicking.
+          googleBtn.click();
+          // Update storage asynchronously after clicking — no race condition because
+          // the popup flow takes several seconds to complete.
+          setPendingOpen({
             ...pendingOpen,
             googleStarted: true,
             loginStartedAt: Date.now(),
-          });
-          button.click();
+          }).catch(() => {});
+          // Stop the pulse animation so the user knows the click was registered.
+          openButton.style.animation = "none";
+          openButton.textContent = "Logging in…";
+          openButton.disabled = true;
           return;
         }
       }
@@ -496,8 +532,69 @@
         // any user on the landing page has necessarily just completed a fresh login.
         // Navigate straight to the target chat.
         location.assign(pendingOpen.chatUrl);
-      }, 2000);
+      }, 800); // 800 ms is sufficient — session cookie is set synchronously on OAuth redirect
     }
+
+    // On the login page, Claude's own auto-login code (GSI + FedCM) fires automatically
+    // and fails because there is no active session. This produces a red
+    // "There was an error logging you in" banner that confuses users.
+    // Since our extension caused this state (we cleared the session cookies), we
+    // suppress that specific error element so the user only sees our clean toast.
+    if (isLoginPage()) {
+      suppressClaudeLoginError();
+    }
+  }
+
+  // Hides Claude's "There was an error logging you in" banner that appears whenever
+  // the page loads without a session and their auto-login (GSI popup + FedCM) fails.
+  // We caused this state by clearing cookies for the account switch, so we clean it up.
+  // The suppression is scoped to the login page and only active while pendingOpen exists.
+  let claudeErrorSuppressor = null;
+  function suppressClaudeLoginError() {
+    if (claudeErrorSuppressor) return; // already watching
+
+    const ERROR_TEXT = "There was an error logging you in";
+
+    function hideErrorEl() {
+      // Walk text nodes looking for the exact error string.
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        null,
+      );
+      let node;
+      while ((node = walker.nextNode())) {
+        if (!node.textContent.includes(ERROR_TEXT)) continue;
+        // Walk up to find the rendered container block (first element with
+        // meaningful width/height that isn't the body itself).
+        let el = node.parentElement;
+        while (el && el !== document.body) {
+          if (el.offsetWidth > 60 && el.offsetHeight > 10) {
+            el.style.setProperty("display", "none", "important");
+            cctLog("🧹 Suppressed Claude login error banner.");
+            break;
+          }
+          el = el.parentElement;
+        }
+        break; // only need to hide one instance
+      }
+    }
+
+    // Run immediately (in case it already rendered) and watch for late injection.
+    hideErrorEl();
+    claudeErrorSuppressor = new MutationObserver(hideErrorEl);
+    claudeErrorSuppressor.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+
+    // Disconnect after 20 s — the error always appears within the first few seconds.
+    window.setTimeout(() => {
+      if (claudeErrorSuppressor) {
+        claudeErrorSuppressor.disconnect();
+        claudeErrorSuppressor = null;
+      }
+    }, 20000);
   }
 
   function findEmailInElement(element) {
@@ -1594,6 +1691,10 @@
     }
 
     if (!cachedOrgId) {
+      // Still run handlePendingOpen even when logged out.
+      // The toast and Google-button auto-click MUST fire on the /login page,
+      // which is exactly the state where cachedOrgId is null (cookies cleared).
+      await handlePendingOpen();
       cctLog(
         "🚫 runFullScrape: no orgId confirmed — user not logged in or API error. Scrape skipped.",
       );
