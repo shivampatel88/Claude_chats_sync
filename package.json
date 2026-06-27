@@ -1,0 +1,12 @@
+{
+  "name": "claude-chat-tracker",
+  "version": "0.5.3",
+  "description": "Track and sync visible Claude.ai chats across your Chrome profiles.",
+  "scripts": {
+    "build": "esbuild src/shared/search-storage.ts src/shared/search-engine.ts src/content/search-indexer.ts --outdir=dist --bundle=false --platform=browser"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.0",
+    "esbuild": "^0.28.1"
+  }
+}

@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Claude Chat Tracker",
-  "version": "0.5.1",
+  "version": "0.5.3",
   "description": "Track and sync visible Claude.ai chats across your Chrome profiles.",
-  "permissions": ["storage", "unlimitedStorage", "cookies"],
+  "permissions": ["storage", "unlimitedStorage", "cookies", "declarativeNetRequest", "tabs"],
   "host_permissions": [
     "https://claude.ai/*",
     "https://anthropic.com/*",
-    "https://auth.anthropic.com/*"
+    "https://auth.anthropic.com/*",
+    "https://accounts.google.com/*"
   ],
   "background": {
     "service_worker": "background/background.js"
@@ -15,7 +16,12 @@
   "content_scripts": [
     {
       "matches": ["https://claude.ai/*"],
-      "js": ["shared/diag-logger.js", "shared/shared.js", "shared/search-storage.js", "content/search-indexer.js", "content/content-script.js"],
+      "js": ["shared/diag-logger.js", "shared/shared.js", "dist/shared/search-storage.js", "dist/content/search-indexer.js", "content/content-script.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://accounts.google.com/o/oauth2/*", "https://accounts.google.com/signin/*"],
+      "js": ["shared/google-account-helper.js"],
       "run_at": "document_idle"
     }
   ],
@@ -35,3 +41,4 @@
     "128": "icons/icon128.png"
   }
 }
+
