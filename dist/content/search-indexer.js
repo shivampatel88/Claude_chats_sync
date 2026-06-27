@@ -69,7 +69,7 @@
     async saveState(state) {
       await chrome.storage.local.set({ [this.key]: state });
     }
-    async start(accountId, orgId, chatIds) {
+    async start(accountId, orgId, chatIds, updatedAtMap = {}) {
       cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
       const state = {
         accountId,
@@ -79,7 +79,8 @@
         failedChatIds: [],
         status: chatIds.length > 0 ? "running" : "complete",
         pausedAt: null,
-        startedAt: Date.now()
+        startedAt: Date.now(),
+        updatedAtMap
       };
       await this.saveState(state);
       if (chatIds.length > 0) {
@@ -138,15 +139,7 @@
         try {
           const content = await fetchChatContent(state.orgId, chatId);
           if (content) {
-            let serverUpdatedAt = 0;
-            const fetchRecentChats = window.__cctInternal?.fetchRecentChats;
-            if (fetchRecentChats) {
-              const recentChats = await fetchRecentChats() ?? [];
-              const chatMeta = recentChats.find((c) => c.chatId === chatId);
-              if (chatMeta?.updatedAt != null) {
-                serverUpdatedAt = chatMeta.updatedAt;
-              }
-            }
+            const serverUpdatedAt = state.updatedAtMap[chatId] ?? 0;
             await window.putChatContent({
               storageId,
               accountId: state.accountId,
@@ -220,9 +213,11 @@
     for (const record of indexedRecords) {
       indexedMap.set(record.chatId, record);
     }
+    const updatedAtMap = {};
     const chatIdsToProcess = [];
     for (const chat of recentChats) {
       const serverTime = chat.updatedAt ?? 0;
+      updatedAtMap[chat.chatId] = serverTime;
       const existing = indexedMap.get(chat.chatId);
       if (existing && existing.serverUpdatedAt === serverTime) {
         continue;
@@ -230,7 +225,7 @@
       chatIdsToProcess.push(chat.chatId);
     }
     cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-    await queue.start(accountId, orgId, chatIdsToProcess);
+    await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap);
   }
   async function waitForBridge() {
     const timeoutMs = 3e4;

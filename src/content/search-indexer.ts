@@ -22,6 +22,9 @@ interface QueueState {
   status: 'idle' | 'running' | 'paused-ratelimited' | 'paused-tab-hidden' | 'complete';
   pausedAt: number | null;
   startedAt: number;
+  // chatId → serverUpdatedAt, fetched once in indexAccount() and stored here
+  // so processNext() never needs to call fetchRecentChats() per chat.
+  updatedAtMap: Record<string, number>;
 }
 
 interface CctInternal {
@@ -143,7 +146,12 @@ export class IndexingQueue {
     await chrome.storage.local.set({ [this.key]: state });
   }
 
-  async start(accountId: string, orgId: string, chatIds: string[]): Promise<void> {
+  async start(
+    accountId: string,
+    orgId: string,
+    chatIds: string[],
+    updatedAtMap: Record<string, number> = {},
+  ): Promise<void> {
     cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
     const state: QueueState = {
       accountId,
@@ -154,6 +162,7 @@ export class IndexingQueue {
       status: chatIds.length > 0 ? 'running' : 'complete',
       pausedAt: null,
       startedAt: Date.now(),
+      updatedAtMap,
     };
     await this.saveState(state);
 
@@ -229,16 +238,9 @@ export class IndexingQueue {
       try {
         const content = await fetchChatContent(state.orgId, chatId);
         if (content) {
-          // Attempt to get current serverUpdatedAt from the bridge
-          let serverUpdatedAt = 0;
-          const fetchRecentChats = window.__cctInternal?.fetchRecentChats;
-          if (fetchRecentChats) {
-            const recentChats = (await fetchRecentChats()) ?? [];
-            const chatMeta = recentChats.find((c) => c.chatId === chatId);
-            if (chatMeta?.updatedAt != null) {
-              serverUpdatedAt = chatMeta.updatedAt;
-            }
-          }
+          // Look up serverUpdatedAt from the map built once in indexAccount().
+          // This avoids calling fetchRecentChats() on every chat fetch cycle.
+          const serverUpdatedAt = state.updatedAtMap[chatId] ?? 0;
 
           await window.putChatContent!({
             storageId,
@@ -328,9 +330,13 @@ export async function indexAccount(accountId: string, orgId: string): Promise<vo
     indexedMap.set(record.chatId, record);
   }
 
+  // Build the updatedAt map once here — passed into the queue so processNext()
+  // can do a plain lookup instead of re-calling fetchRecentChats() per chat.
+  const updatedAtMap: Record<string, number> = {};
   const chatIdsToProcess: string[] = [];
   for (const chat of recentChats) {
     const serverTime = chat.updatedAt ?? 0;
+    updatedAtMap[chat.chatId] = serverTime;
     const existing = indexedMap.get(chat.chatId);
     if (existing && existing.serverUpdatedAt === serverTime) {
       // Already indexed and up to date
@@ -340,7 +346,7 @@ export async function indexAccount(accountId: string, orgId: string): Promise<vo
   }
 
   cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-  await queue.start(accountId, orgId, chatIdsToProcess);
+  await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap);
 }
 
 // ─── 5. waitForBridge ────────────────────────────────────────────────
