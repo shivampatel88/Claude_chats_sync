@@ -47,12 +47,26 @@
 
   <main>
     <div class="toolbar-row">
-      <label class="search">
-        <span class="sr-only">Search chats</span>
-        <input id="searchInput" type="search" placeholder="Search chats" autocomplete="off">
-      </label>
-      <label for="accountFilterSelect" class="sr-only">Show</label>
-      <select id="accountFilterSelect" class="account-select"></select>
+      <div class="search-container">
+        <label class="search">
+          <span class="sr-only">Search chats</span>
+          <input id="searchInput" type="search" placeholder="Search chats" autocomplete="off">
+        </label>
+        
+        <!-- Embedded Premium Account Selector -->
+        <div class="custom-acct-filter" id="acctFilterContainer">
+          <button id="acctFilterTrigger" class="acct-filter-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span class="acct-dot" id="acctTriggerDot"></span>
+            <span class="acct-name-label" id="acctTriggerLabel">All Accounts</span>
+            <svg class="chevron-icon" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          
+          <ul id="acctFilterMenu" class="acct-filter-menu" role="listbox" aria-label="Filter by account" style="display: none;">
+            <!-- Dynamic list items will be injected here -->
+          </ul>
+        </div>
+      </div>
+
       <button id="semanticGearBtn" class="icon-button" type="button" aria-label="Semantic search settings" title="Semantic search settings">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>

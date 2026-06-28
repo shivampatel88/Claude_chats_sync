@@ -241,28 +241,31 @@ input {
   padding: 12px 16px 8px;
 }
 
-.search {
+.search-container {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.search input,
-.account-select {
+.search {
+  display: block;
+  width: 100%;
+}
+
+.search input {
   height: 36px;
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   outline: none;
   background: rgba(25, 26, 27, 0.72);
   color: var(--text);
-  padding: 0 13px;
+  padding: 0 145px 0 13px; /* Leave space for custom-acct-filter on the right */
   font-size: 13px;
   backdrop-filter: blur(16px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   font-family: inherit;
-}
-
-.search input {
-  width: 100%;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .search input::placeholder {
@@ -271,13 +274,143 @@ input {
 
 .search input:focus {
   border-color: rgba(216, 122, 69, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 12px rgba(216, 122, 69, 0.15);
 }
 
-.account-select {
-  position: relative;
-  z-index: 0;
-  flex: 0 0 140px;
-  padding: 0 10px;
+/* Custom Account Filter Selector inside Search Input */
+.custom-acct-filter {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+}
+
+.acct-filter-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 135px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.acct-filter-trigger:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.acct-filter-trigger .acct-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a0a0a5; /* default grey dot */
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+}
+
+.acct-filter-trigger .acct-name-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-filter-trigger .chevron-icon {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  stroke: var(--muted);
+  stroke-width: 2.5;
+  fill: none;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.custom-acct-filter.open .chevron-icon {
+  transform: rotate(180deg);
+}
+
+/* The custom dropdown menu */
+.acct-filter-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 180px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 5px 0;
+  list-style: none;
+  background: rgba(20, 21, 23, 0.96);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  z-index: 1000;
+  animation: dropdownFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top right;
+}
+
+/* Custom scrollbar for dropdown menu */
+.acct-filter-menu::-webkit-scrollbar {
+  width: 4px;
+}
+.acct-filter-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+.acct-filter-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 99px;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.acct-filter-menu li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.acct-filter-menu li:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.acct-filter-menu li.active {
+  background: rgba(216, 122, 69, 0.08);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.acct-filter-menu li .acct-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
 }
 
 .meta-row {

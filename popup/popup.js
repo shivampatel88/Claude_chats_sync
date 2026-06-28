@@ -706,35 +706,73 @@ async function triggerIndexing(account) {
   }
 }
 
-function makeFilterButton(label, accountId, color) {
-  const option = document.createElement("option");
-  option.value = accountId;
-  option.textContent = label;
-  if (color) option.dataset.color = color;
-  return option;
-}
-
 function renderFilters() {
-  const filters = document.getElementById("accountFilterSelect");
-  filters.replaceChildren();
-  filters.appendChild(makeFilterButton("All accounts", "all"));
+  const menu = document.getElementById("acctFilterMenu");
+  if (!menu) return;
+  menu.replaceChildren();
 
+  // Helper to add list item
+  const addMenuItem = (label, accountId, color) => {
+    const li = document.createElement("li");
+    li.role = "option";
+    li.dataset.value = accountId;
+    if (state.activeAccountId === accountId) {
+      li.className = "active";
+    }
+
+    const dot = document.createElement("span");
+    dot.className = "acct-dot";
+    dot.style.backgroundColor = color || "#a0a0a5";
+
+    const text = document.createElement("span");
+    text.textContent = label;
+
+    li.append(dot, text);
+
+    li.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.activeAccountId = accountId;
+      menu.style.display = "none";
+      const container = document.getElementById("acctFilterContainer");
+      if (container) container.classList.remove("open");
+      render();
+    });
+
+    menu.appendChild(li);
+  };
+
+  // Add "All accounts" option
+  addMenuItem("All accounts", "all", "#a0a0a5");
+
+  // Add individual accounts
   Object.values(state.accounts || {})
     .sort((a, b) => shortAccountName(a).localeCompare(shortAccountName(b)))
     .forEach((account) => {
-      filters.appendChild(
-        makeFilterButton(
-          shortAccountName(account),
-          account.accountId,
-          account.color,
-        ),
+      addMenuItem(
+        shortAccountName(account),
+        account.accountId,
+        account.color,
       );
     });
 
-  filters.value = state.activeAccountId;
-  if (filters.value !== state.activeAccountId) {
+  // Check if activeAccountId is still valid, fallback to "all"
+  if (state.activeAccountId !== "all" && !state.accounts[state.activeAccountId]) {
     state.activeAccountId = "all";
-    filters.value = "all";
+  }
+
+  // Update Trigger Button UI
+  const triggerLabel = document.getElementById("acctTriggerLabel");
+  const triggerDot = document.getElementById("acctTriggerDot");
+
+  if (state.activeAccountId === "all") {
+    if (triggerLabel) triggerLabel.textContent = "All Accounts";
+    if (triggerDot) triggerDot.style.backgroundColor = "#a0a0a5";
+  } else {
+    const activeAcct = state.accounts[state.activeAccountId];
+    if (activeAcct) {
+      if (triggerLabel) triggerLabel.textContent = shortAccountName(activeAcct);
+      if (triggerDot) triggerDot.style.backgroundColor = activeAcct.color;
+    }
   }
 }
 
@@ -1376,12 +1414,30 @@ function bindEvents() {
     renderChats();
   });
 
-  document
-    .getElementById("accountFilterSelect")
-    .addEventListener("change", (event) => {
-      state.activeAccountId = event.target.value;
-      render();
+  // Custom account selector trigger dropdown toggle
+  const triggerBtn = document.getElementById("acctFilterTrigger");
+  const acctContainer = document.getElementById("acctFilterContainer");
+  const filterMenu = document.getElementById("acctFilterMenu");
+
+  if (triggerBtn && filterMenu) {
+    triggerBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = acctContainer.classList.contains("open");
+      if (isOpen) {
+        acctContainer.classList.remove("open");
+        filterMenu.style.display = "none";
+      } else {
+        acctContainer.classList.add("open");
+        filterMenu.style.display = "";
+      }
     });
+
+    // Close menu when clicking outside
+    document.addEventListener("click", () => {
+      if (acctContainer) acctContainer.classList.remove("open");
+      if (filterMenu) filterMenu.style.display = "none";
+    });
+  }
 
   const startDeleteBtn = document.getElementById("startDeleteBtn");
   const deleteConfirmActions = document.getElementById("deleteConfirmActions");
