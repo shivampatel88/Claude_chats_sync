@@ -571,8 +571,9 @@ async function updateIndexStatusUI(account) {
       label.textContent = "Search inside messages: Off";
 
       const enableBtn = document.createElement("button");
-      enableBtn.className = "index-btn";
+      enableBtn.className = "index-btn has-tooltip";
       enableBtn.textContent = "Turn On";
+      enableBtn.setAttribute("data-tooltip", "Enable indexing for this account");
       enableBtn.onclick = async () => {
         state.allowedIndexingAccounts.push(account.accountId);
         await persistData();
@@ -590,8 +591,9 @@ async function updateIndexStatusUI(account) {
     const statusLabel = document.createElement("span");
 
     const disableBtn = document.createElement("button");
-    disableBtn.className = "index-btn";
+    disableBtn.className = "index-btn has-tooltip";
     disableBtn.textContent = "Turn Off";
+    disableBtn.setAttribute("data-tooltip", "Turn off indexing & delete local database");
     disableBtn.onclick = async () => {
       if (
         confirm(
@@ -623,8 +625,9 @@ async function updateIndexStatusUI(account) {
       statusLabel.textContent = "Search inside messages: Ready";
 
       const indexBtn = document.createElement("button");
-      indexBtn.className = "index-btn";
+      indexBtn.className = "index-btn has-tooltip";
       indexBtn.textContent = "Scan Chats";
+      indexBtn.setAttribute("data-tooltip", "Download chat history locally so it can be searched");
       indexBtn.onclick = () => triggerIndexing(account);
 
       const actionsRow = document.createElement("div");
@@ -651,8 +654,9 @@ async function updateIndexStatusUI(account) {
       statusLabel.textContent = `Scanned ${formatChatDate(d.getTime())}`;
 
       const reindexBtn = document.createElement("button");
-      reindexBtn.className = "index-btn";
+      reindexBtn.className = "index-btn has-tooltip";
       reindexBtn.textContent = "Rescan";
+      reindexBtn.setAttribute("data-tooltip", "Rescan chat history to update search database");
       reindexBtn.onclick = () => triggerIndexing(account);
 
       const actionsRow = document.createElement("div");
@@ -1745,6 +1749,7 @@ function bindEvents() {
   document.querySelectorAll('input[name="searchMode"]').forEach((radio) => {
     radio.addEventListener("change", async (e) => {
       const mode = e.target.value;
+      if (state.searchMode === mode) return;
       state.searchMode = mode;
 
       const enabled = (mode !== "text");
@@ -1763,8 +1768,8 @@ function bindEvents() {
         badge.textContent = mode === "semantic" ? "⚡ Semantic" : "⚡ Hybrid";
       }
 
-      // Trigger scanning if we just enabled it and have an active account
-      if (enabled && apiKey) {
+      // Trigger scanning if we just enabled it and have an active account (only on user interaction)
+      if (e.isTrusted && enabled && apiKey) {
         const account = selectedAccountForActions() ||
           (state.currentAccountId ? state.accounts[state.currentAccountId] : null);
         if (account) triggerIndexing(account);

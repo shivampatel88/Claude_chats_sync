@@ -1126,7 +1126,7 @@ input {
 }
 
 .radio-inputs .radio input:checked + .name {
-  color: #fff;
+  color: #111213;
   font-weight: 700;
 }
 
@@ -1183,4 +1183,112 @@ input {
 .radio-inputs:has(.radio:nth-child(3) input:checked) .selection-indicator {
   left: calc(66.666% + 2px);
   right: 4px;
+}
+
+/* Tooltip styles */
+.has-tooltip {
+  position: relative;
+}
+
+.has-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 130%;
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: rgba(20, 20, 22, 0.95);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 5px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.has-tooltip::before {
+  content: "";
+  position: absolute;
+  bottom: 110%;
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  border-width: 5px;
+  border-style: solid;
+  border-color: rgba(20, 20, 22, 0.95) transparent transparent transparent;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 100;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.has-tooltip:hover::after,
+.has-tooltip:focus-within::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.has-tooltip:hover::before,
+.has-tooltip:focus-within::before {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Specific alignment tweaks for leftmost and rightmost radio buttons to prevent overflow clipping */
+.radio-inputs .radio:nth-child(1).has-tooltip::after {
+  left: 4px;
+  transform: translateY(4px);
+}
+.radio-inputs .radio:nth-child(1).has-tooltip:hover::after,
+.radio-inputs .radio:nth-child(1).has-tooltip:focus-within::after {
+  transform: translateY(0);
+}
+
+.radio-inputs .radio:nth-child(1).has-tooltip::before {
+  left: 20%;
+}
+
+.radio-inputs .radio:nth-child(3).has-tooltip::after {
+  left: auto;
+  right: 4px;
+  transform: translateY(4px);
+}
+.radio-inputs .radio:nth-child(3).has-tooltip:hover::after,
+.radio-inputs .radio:nth-child(3).has-tooltip:focus-within::after {
+  transform: translateY(0);
+}
+
+.radio-inputs .radio:nth-child(3).has-tooltip::before {
+  left: auto;
+  right: 20%;
+  transform: translateX(50%) translateY(4px);
+}
+.radio-inputs .radio:nth-child(3).has-tooltip:hover::before,
+.radio-inputs .radio:nth-child(3).has-tooltip:focus-within::before {
+  transform: translateX(50%) translateY(0);
+}
+
+/* Specific alignment for right-aligned index section buttons to prevent clipping */
+.index-status .index-btn.has-tooltip::after {
+  left: auto;
+  right: 0;
+  transform: translateY(4px);
+}
+.index-status .index-btn.has-tooltip:hover::after,
+.index-status .index-btn.has-tooltip:focus-within::after {
+  transform: translateY(0);
+}
+
+.index-status .index-btn.has-tooltip::before {
+  left: auto;
+  right: 20px;
+  transform: translateX(50%) translateY(4px);
+}
+.index-status .index-btn.has-tooltip:hover::before,
+.index-status .index-btn.has-tooltip:focus-within::before {
+  transform: translateX(50%) translateY(0);
 }
