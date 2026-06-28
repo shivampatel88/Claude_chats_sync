@@ -113,6 +113,17 @@
 
 
 
+      <!-- Global Settings Section (shown when activeAccountId is "all") -->
+      <div id="globalActionArea" class="drawer-account-section" style="display: none;">
+        <div class="drawer-section-title">All Accounts Settings</div>
+        <div class="index-status">
+          <span>Auto-index all accounts: <strong id="globalIndexStatusText">Off</strong></span>
+          <button id="globalIndexToggleBtn" class="index-btn has-tooltip" type="button" data-tooltip="Automatically enable indexing for all accounts when selected">
+            Turn On
+          </button>
+        </div>
+      </div>
+
       <!-- Account Settings & Actions Section -->
       <div id="accountActionArea" class="drawer-account-section" style="display: none;">
         <div class="drawer-section-title">Account Management</div>
@@ -150,6 +161,13 @@
         <div class="drawer-section-title">Message Search Index</div>
         <div id="indexStatusContainer" class="index-status">
           <!-- Populated dynamically -->
+        </div>
+        <div id="embeddingActionsRow" class="embedding-actions-row" style="display:none">
+          <span class="embedding-actions-label" id="embeddingCountLabel"></span>
+          <button id="deleteEmbeddingsBtn" class="acct-icon-btn danger" type="button" title="Delete stored vector embeddings for this account">
+            <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <span>Delete Embeddings</span>
+          </button>
         </div>
       </div>
     </div>
