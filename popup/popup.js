@@ -132,6 +132,9 @@ const ACCOUNT_COLORS = [
 let searchIndexHandle = null;
 let indexProgressPollTimer = null;
 
+// Phase B: debounce timer for API key saves
+let _semanticKeySaveTimer = null;
+
 let state = {
   accounts: {},
   chats: {},
@@ -144,6 +147,8 @@ let state = {
   starredChatIds: new Set(), // storageId strings — starred chats always sort to top
   profileLocalId: "",
   allowedIndexingAccounts: [], // list of accountIds that have indexing enabled
+  // Phase B
+  semanticSettings: null, // { enabled, apiKey } or null
 };
 
 // BUG-01 fix: re-entrancy guard — set to true while we are writing to chrome.storage.sync
@@ -541,20 +546,13 @@ function renderStatus() {
 }
 
 async function updateIndexStatusUI(account) {
-  let statusContainer = document.getElementById("indexStatusContainer");
-  if (!statusContainer) {
-    const actionArea = document.getElementById("accountActionArea");
-    if (!actionArea) return;
-    statusContainer = document.createElement("div");
-    statusContainer.id = "indexStatusContainer";
-    statusContainer.className = "index-status";
-    const icons = document.getElementById("accountIcons");
-    if (icons) {
-      actionArea.insertBefore(statusContainer, icons);
-    } else {
-      actionArea.appendChild(statusContainer);
-    }
+  const drawerAccountNameEl = document.getElementById("drawerAccountName");
+  if (drawerAccountNameEl && account) {
+    drawerAccountNameEl.textContent = shortAccountName(account);
   }
+
+  let statusContainer = document.getElementById("indexStatusContainer");
+  if (!statusContainer) return;
 
   if (indexProgressPollTimer) {
     clearInterval(indexProgressPollTimer);
@@ -569,7 +567,6 @@ async function updateIndexStatusUI(account) {
     if (!isEnabled) {
       const label = document.createElement("span");
       label.textContent = "Search inside messages: Off";
-      label.style.marginRight = "8px";
 
       const enableBtn = document.createElement("button");
       enableBtn.className = "index-btn";
@@ -589,7 +586,6 @@ async function updateIndexStatusUI(account) {
     const q = local.indexingQueue;
 
     const statusLabel = document.createElement("span");
-    statusLabel.style.marginRight = "8px";
 
     const disableBtn = document.createElement("button");
     disableBtn.className = "index-btn";
@@ -607,6 +603,10 @@ async function updateIndexStatusUI(account) {
         if (window.deleteChatContentForAccount) {
           await window.deleteChatContentForAccount(account.accountId);
         }
+        // Phase B: also clear embeddings for this account
+        if (window.deleteEmbeddingsForAccount) {
+          await window.deleteEmbeddingsForAccount(account.accountId);
+        }
         if (q && q.accountId === account.accountId) {
           await chrome.storage.local.remove(["indexingQueue"]);
         }
@@ -622,11 +622,15 @@ async function updateIndexStatusUI(account) {
 
       const indexBtn = document.createElement("button");
       indexBtn.className = "index-btn";
-      indexBtn.style.marginRight = "5px";
       indexBtn.textContent = "Scan Chats";
       indexBtn.onclick = () => triggerIndexing(account);
 
-      statusContainer.append(statusLabel, indexBtn, disableBtn);
+      const actionsRow = document.createElement("div");
+      actionsRow.style.display = "flex";
+      actionsRow.style.gap = "6px";
+      actionsRow.append(indexBtn, disableBtn);
+
+      statusContainer.append(statusLabel, actionsRow);
     } else if (q.status === "running" || q.status === "paused-tab-hidden") {
       const total =
         q.doneChatIds.length + q.pendingChatIds.length + q.failedChatIds.length;
@@ -646,11 +650,15 @@ async function updateIndexStatusUI(account) {
 
       const reindexBtn = document.createElement("button");
       reindexBtn.className = "index-btn";
-      reindexBtn.style.marginRight = "5px";
       reindexBtn.textContent = "Rescan";
       reindexBtn.onclick = () => triggerIndexing(account);
 
-      statusContainer.append(statusLabel, reindexBtn, disableBtn);
+      const actionsRow = document.createElement("div");
+      actionsRow.style.display = "flex";
+      actionsRow.style.gap = "6px";
+      actionsRow.append(reindexBtn, disableBtn);
+
+      statusContainer.append(statusLabel, actionsRow);
     }
   };
 
@@ -1004,6 +1012,47 @@ function renderChats() {
 
   const queryRaw = state.query.trim();
   if (queryRaw && searchIndexHandle && window.searchContent) {
+    // Phase B: use hybrid search if semantic is enabled and a query embedding can be fetched
+    if (
+      state.semanticSettings &&
+      state.semanticSettings.enabled &&
+      state.semanticSettings.apiKey &&
+      window.searchContentHybrid &&
+      window.generateEmbedding
+    ) {
+      // Run hybrid search asynchronously; fall back to keyword results immediately if the
+      // embedding API call fails or takes too long.
+      window
+        .generateEmbedding(
+          queryRaw,
+          state.semanticSettings.apiKey,
+        )
+        .then((queryEmbedding) => {
+          return window.searchContentHybrid(searchIndexHandle, queryRaw, queryEmbedding);
+        })
+        .then((hybridResults) => {
+          // Re-render with hybrid results only if query hasn't changed in the meantime
+          if (state.query.trim() !== queryRaw) return;
+          const titleMatchIds = new Set(allChats.map((c) => c.storageId));
+          const finalChats = [...allChats];
+          for (const res of hybridResults) {
+            if (!titleMatchIds.has(res.storageId)) {
+              const chatObj = state.chats[res.storageId];
+              if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet });
+            } else {
+              const idx = finalChats.findIndex((c) => c.storageId === res.storageId);
+              if (idx !== -1) finalChats[idx] = { ...finalChats[idx], _snippet: res.snippet };
+            }
+          }
+          // Re-draw chat list with hybrid results
+          _renderChatListItems(list, summary, finalChats);
+        })
+        .catch(() => {
+          // API failed — keyword results already rendered below, nothing to do
+        });
+    }
+
+    // Always render keyword results synchronously as the immediate baseline
     const contentResults = window.searchContent(searchIndexHandle, queryRaw);
     const titleMatchIds = new Set(allChats.map((c) => c.storageId));
 
@@ -1026,16 +1075,16 @@ function renderChats() {
     }
   }
 
-  const starredChats = allChats.filter((c) =>
-    state.starredChatIds.has(c.storageId),
-  );
-  const normalChats = allChats.filter(
-    (c) => !state.starredChatIds.has(c.storageId),
-  );
+  _renderChatListItems(list, summary, allChats);
+}
 
+// Extracted renderer so the hybrid-search async re-render path can reuse it.
+function _renderChatListItems(list, summary, allChats) {
   list.replaceChildren();
   summary.textContent = state.query.trim()
-    ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}`
+    ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}${
+        state.semanticSettings && state.semanticSettings.enabled ? " \u26a1" : ""
+      }`
     : "Newest first, matching Claude Recents";
 
   if (allChats.length === 0) {
@@ -1055,6 +1104,9 @@ function renderChats() {
     header.textContent = label;
     list.appendChild(header);
   }
+
+  const starredChats = allChats.filter((c) => state.starredChatIds.has(c.storageId));
+  const normalChats = allChats.filter((c) => !state.starredChatIds.has(c.storageId));
 
   if (starredChats.length > 0) {
     appendSectionHeader("Starred");
@@ -1200,6 +1252,19 @@ async function reloadData() {
     searchIndexHandle = await window.buildSearchIndex();
   }
 
+  // Phase B: load semantic settings so search and badge UI are current
+  if (window.getSemanticSettings) {
+    state.semanticSettings = await window.getSemanticSettings();
+    if (!state.semanticSettings && window.DEFAULT_EMBEDDING_KEY) {
+      // Auto-initialize if it hasn't been saved yet
+      state.semanticSettings = { enabled: true, apiKey: window.DEFAULT_EMBEDDING_KEY };
+      if (window.saveSemanticSettings) window.saveSemanticSettings(state.semanticSettings);
+    } else if (state.semanticSettings && !state.semanticSettings.apiKey && window.DEFAULT_EMBEDDING_KEY) {
+      // Backfill the default key if they cleared it
+      state.semanticSettings.apiKey = window.DEFAULT_EMBEDDING_KEY;
+    }
+  }
+
   maybeResumeQueue();
 
   render();
@@ -1308,6 +1373,8 @@ function bindEvents() {
   let deleteTimeout = null;
 
   function resetDeleteState() {
+    const renameBtn = document.getElementById("renameAccountBtn");
+    if (renameBtn) renameBtn.style.display = "";
     if (startDeleteBtn) startDeleteBtn.style.display = "";
     if (deleteConfirmActions) deleteConfirmActions.style.display = "none";
     if (deleteTimeout) {
@@ -1319,6 +1386,8 @@ function bindEvents() {
   if (startDeleteBtn) {
     startDeleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      const renameBtn = document.getElementById("renameAccountBtn");
+      if (renameBtn) renameBtn.style.display = "none";
       startDeleteBtn.style.display = "none";
       deleteConfirmActions.style.display = "flex";
       deleteTimeout = setTimeout(() => {
@@ -1450,6 +1519,7 @@ function bindEvents() {
     const panel = document.getElementById("inlineEditPanel");
     const input = document.getElementById("inlineEditInput");
     const icons = document.getElementById("accountIcons");
+    const metaInfo = document.querySelector(".account-meta-info");
 
     if (!panel || !input) {
       // safety fallback to prompt() if DOM not ready
@@ -1459,6 +1529,7 @@ function bindEvents() {
     }
     input.value = currentValue || "";
     if (icons) icons.style.display = "none";
+    if (metaInfo) metaInfo.style.display = "none";
     panel.style.display = "flex";
     input.focus();
     input.select();
@@ -1469,6 +1540,7 @@ function bindEvents() {
       finished = true;
       panel.style.display = "none";
       if (icons) icons.style.display = "";
+      if (metaInfo) metaInfo.style.display = "";
     };
 
     input.onblur = () => {
@@ -1619,6 +1691,72 @@ function bindEvents() {
       reloadData();
     }
   });
+
+  // ─── Phase B: Semantic Search Drawer Binding ──────────────────────────
+
+  const gearBtn = document.getElementById("semanticGearBtn");
+  if (gearBtn) {
+    gearBtn.addEventListener("click", () => {
+      const drawer = document.getElementById("semanticDrawer");
+      if (drawer) {
+        drawer.style.display = drawer.style.display === "none" ? "" : "none";
+        if (drawer.style.display !== "none") _syncSemanticDrawerState();
+      }
+    });
+  }
+
+  const semanticCollapseBtn = document.getElementById("semanticCollapseBtn");
+  if (semanticCollapseBtn) {
+    semanticCollapseBtn.addEventListener("click", () => {
+      const drawer = document.getElementById("semanticDrawer");
+      if (drawer) drawer.style.display = "none";
+    });
+  }
+
+  /** Sync the drawer UI elements to match current state.semanticSettings */
+  function _syncSemanticDrawerState() {
+    const check = document.getElementById("semanticEnabledCheck");
+    const badge = document.getElementById("semanticBadge");
+
+    const isEnabled = !!(state.semanticSettings && state.semanticSettings.enabled);
+    if (check) check.checked = isEnabled;
+    if (badge) badge.style.display = isEnabled ? "" : "none";
+  }
+
+  const semanticEnabledCheck = document.getElementById("semanticEnabledCheck");
+  if (semanticEnabledCheck) {
+    semanticEnabledCheck.addEventListener("change", async (e) => {
+      const enabled = e.target.checked;
+      const badge = document.getElementById("semanticBadge");
+      if (badge) badge.style.display = enabled ? "" : "none";
+
+      const currentKey = state.semanticSettings ? state.semanticSettings.apiKey : "";
+      const newSettings = { enabled, apiKey: currentKey };
+      state.semanticSettings = newSettings;
+      if (window.saveSemanticSettings) {
+        await window.saveSemanticSettings(newSettings);
+      }
+
+      if (enabled && currentKey) {
+        // Trigger embedding scan for current account
+        const account = selectedAccountForActions() ||
+          (state.currentAccountId ? state.accounts[state.currentAccountId] : null);
+        if (account) triggerIndexing(account);
+      }
+    });
+  }
+
+
+
+
+  // Show drawer on load if already enabled
+  if (state.semanticSettings && state.semanticSettings.enabled) {
+    const drawer = document.getElementById("semanticDrawer");
+    if (drawer) {
+      drawer.style.display = "";
+      _syncSemanticDrawerState();
+    }
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

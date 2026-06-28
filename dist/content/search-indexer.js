@@ -61,6 +61,10 @@
       // 5 minutes
       this.processNextTimeout = null;
       this.isProcessing = false;
+      // Phase B: semantic embedding settings (loaded once at start(), never persisted)
+      this.semanticEnabled = false;
+      this.semanticApiKey = null;
+      this.embeddingError = null;
     }
     async loadState() {
       const data = await chrome.storage.local.get([this.key]);
@@ -71,6 +75,17 @@
     }
     async start(accountId, orgId, chatIds, updatedAtMap = {}) {
       cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
+      this.semanticEnabled = false;
+      this.semanticApiKey = null;
+      this.embeddingError = null;
+      if (window.getSemanticSettings) {
+        const settings = await window.getSemanticSettings();
+        if (settings && settings.enabled && settings.apiKey) {
+          this.semanticEnabled = true;
+          this.semanticApiKey = settings.apiKey;
+          cctLog(`Semantic embedding enabled for this queue run`);
+        }
+      }
       const state = {
         accountId,
         orgId,
@@ -80,7 +95,8 @@
         status: chatIds.length > 0 ? "running" : "complete",
         pausedAt: null,
         startedAt: Date.now(),
-        updatedAtMap
+        updatedAtMap,
+        embeddingError: null
       };
       await this.saveState(state);
       if (chatIds.length > 0) {
@@ -150,6 +166,28 @@
               serverUpdatedAt
             });
             state.doneChatIds.push(chatId);
+            if (this.semanticEnabled && this.semanticApiKey && !this.embeddingError && window.generateEmbedding && window.putEmbedding) {
+              try {
+                const embedText = (content.firstMessage + " " + content.lastMessage).slice(0, 2e3);
+                cctLog(`Generating embedding for ${chatId}...`);
+                const vector = await window.generateEmbedding(embedText, this.semanticApiKey);
+                await window.putEmbedding(storageId, vector);
+                cctLog(`Embedding stored for ${chatId}`);
+              } catch (embErr) {
+                const msg = embErr instanceof Error ? embErr.message : String(embErr);
+                if (msg === "INVALID_KEY") {
+                  cctWarn("Invalid Gemini API key \u2014 disabling embedding for this run");
+                  this.embeddingError = "invalid-key";
+                  state.embeddingError = "invalid-key";
+                } else if (msg === "RATE_LIMITED") {
+                  cctWarn("Gemini rate limit hit \u2014 embedding skipped for this chat, continuing");
+                  this.embeddingError = "rate-limited";
+                  state.embeddingError = "rate-limited";
+                } else {
+                  cctWarn(`Embedding failed for ${chatId}:`, embErr);
+                }
+              }
+            }
           } else {
             state.failedChatIds.push(chatId);
           }

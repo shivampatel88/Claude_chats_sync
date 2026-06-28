@@ -25,6 +25,8 @@ interface QueueState {
   // chatId → serverUpdatedAt, fetched once in indexAccount() and stored here
   // so processNext() never needs to call fetchRecentChats() per chat.
   updatedAtMap: Record<string, number>;
+  // Phase B: embedding error flag (no API key stored in persisted state)
+  embeddingError: 'invalid-key' | 'rate-limited' | null;
 }
 
 interface CctInternal {
@@ -42,6 +44,10 @@ declare global {
     getAllIndexedEntries?: () => Promise<Record<string, ChatContentRecord>>;
     getAllChatContentForAccount?: (accountId: string) => Promise<ChatContentRecord[]>;
     deleteChatContentForAccount?: (accountId: string) => Promise<number>;
+    // Phase B
+    putEmbedding?: (storageId: string, vector: number[]) => Promise<void>;
+    generateEmbedding?: (text: string, apiKey: string) => Promise<number[]>;
+    getSemanticSettings?: () => Promise<{ enabled: boolean; apiKey: string } | null>;
   }
 }
 
@@ -137,6 +143,11 @@ export class IndexingQueue {
   private processNextTimeout: ReturnType<typeof setTimeout> | null = null;
   private isProcessing = false;
 
+  // Phase B: semantic embedding settings (loaded once at start(), never persisted)
+  private semanticEnabled = false;
+  private semanticApiKey: string | null = null;
+  private embeddingError: 'invalid-key' | 'rate-limited' | null = null;
+
   async loadState(): Promise<QueueState | null> {
     const data = await chrome.storage.local.get([this.key]);
     return (data[this.key] as QueueState) ?? null;
@@ -153,6 +164,20 @@ export class IndexingQueue {
     updatedAtMap: Record<string, number> = {},
   ): Promise<void> {
     cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
+
+    // Phase B: snapshot semantic settings into instance vars (key never goes into QueueState)
+    this.semanticEnabled = false;
+    this.semanticApiKey = null;
+    this.embeddingError = null;
+    if (window.getSemanticSettings) {
+      const settings = await window.getSemanticSettings();
+      if (settings && settings.enabled && settings.apiKey) {
+        this.semanticEnabled = true;
+        this.semanticApiKey = settings.apiKey;
+        cctLog(`Semantic embedding enabled for this queue run`);
+      }
+    }
+
     const state: QueueState = {
       accountId,
       orgId,
@@ -163,6 +188,7 @@ export class IndexingQueue {
       pausedAt: null,
       startedAt: Date.now(),
       updatedAtMap,
+      embeddingError: null,
     };
     await this.saveState(state);
 
@@ -252,6 +278,42 @@ export class IndexingQueue {
             serverUpdatedAt,
           });
           state.doneChatIds.push(chatId);
+
+          // ── Phase B: generate and store embedding ──────────────────
+          if (
+            this.semanticEnabled &&
+            this.semanticApiKey &&
+            !this.embeddingError &&
+            window.generateEmbedding &&
+            window.putEmbedding
+          ) {
+            try {
+              // Concatenate first + last message, capped at 2000 chars total
+              const embedText = (content.firstMessage + ' ' + content.lastMessage).slice(0, 2000);
+              cctLog(`Generating embedding for ${chatId}...`);
+              const vector = await window.generateEmbedding(embedText, this.semanticApiKey);
+              await window.putEmbedding(storageId, vector);
+              cctLog(`Embedding stored for ${chatId}`);
+            } catch (embErr: unknown) {
+              const msg = embErr instanceof Error ? embErr.message : String(embErr);
+              if (msg === 'INVALID_KEY') {
+                cctWarn('Invalid Gemini API key — disabling embedding for this run');
+                this.embeddingError = 'invalid-key';
+                // Persist the error so the popup can reflect it on next status poll
+                state.embeddingError = 'invalid-key';
+              } else if (msg === 'RATE_LIMITED') {
+                cctWarn('Gemini rate limit hit — embedding skipped for this chat, continuing');
+                // Don't fail the whole queue; just skip embeddings temporarily
+                this.embeddingError = 'rate-limited';
+                state.embeddingError = 'rate-limited';
+              } else {
+                cctWarn(`Embedding failed for ${chatId}:`, embErr);
+                // Non-fatal: content is already indexed; embedding is best-effort
+              }
+            }
+          }
+          // ── End Phase B ────────────────────────────────────────────
+
         } else {
           state.failedChatIds.push(chatId);
         }

@@ -53,4 +53,74 @@
   }
   window.buildSearchIndex = buildSearchIndex;
   window.searchContent = searchContent;
+  const KEYWORD_WEIGHT = 0.3;
+  const SEMANTIC_WEIGHT = 0.7;
+  const SEMANTIC_ONLY_THRESHOLD = 0.3;
+  const MIN_COMBINED_SCORE = 0.05;
+  function cosineSimilarity(vecA, vecB) {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+      dot += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+    return normA === 0 || normB === 0 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+  async function searchContentHybrid(index, query, queryEmbedding) {
+    const keywordResults = searchContent(index, query);
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      return keywordResults;
+    }
+    const rawScores = keywordResults.map((r) => r.score);
+    const maxKeywordScore = Math.max(...rawScores, 1);
+    const normalizedKeywordMap = /* @__PURE__ */ new Map();
+    for (const r of keywordResults) {
+      normalizedKeywordMap.set(r.storageId, r.score / maxKeywordScore);
+    }
+    const embeddings = await window.getAllEmbeddings();
+    const semanticScoreMap = /* @__PURE__ */ new Map();
+    for (const [storageId, vec] of Object.entries(embeddings)) {
+      semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
+    }
+    const merged = /* @__PURE__ */ new Map();
+    for (const r of keywordResults) {
+      merged.set(r.storageId, {
+        storageId: r.storageId,
+        accountId: r.accountId,
+        chatId: r.chatId,
+        snippet: r.snippet,
+        normalizedKeyword: normalizedKeywordMap.get(r.storageId) ?? 0,
+        semanticScore: semanticScoreMap.get(r.storageId) ?? 0
+      });
+    }
+    if (semanticScoreMap.size > 0) {
+      const entries = await window.getAllIndexedEntries();
+      for (const [storageId, semScore] of semanticScoreMap.entries()) {
+        if (merged.has(storageId)) {
+          merged.get(storageId).semanticScore = semScore;
+        } else if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
+          const record = entries[storageId];
+          if (!record) continue;
+          merged.set(storageId, {
+            storageId,
+            accountId: record.accountId,
+            chatId: record.chatId,
+            snippet: extractSnippet(record, query),
+            normalizedKeyword: 0,
+            semanticScore: semScore
+          });
+        }
+      }
+    }
+    return Array.from(merged.values()).map((r) => ({
+      storageId: r.storageId,
+      accountId: r.accountId,
+      chatId: r.chatId,
+      snippet: r.snippet,
+      score: r.normalizedKeyword * KEYWORD_WEIGHT + r.semanticScore * SEMANTIC_WEIGHT
+    })).filter((r) => r.score >= MIN_COMBINED_SCORE).sort((a, b) => b.score - a.score);
+  }
+  window.searchContentHybrid = searchContentHybrid;
 })();

@@ -1,6 +1,8 @@
 "use strict";
 (() => {
   const STORAGE_KEY = "searchIndex";
+  const EMBEDDING_KEY = "embeddingIndex";
+  const SEMANTIC_SETTINGS_KEY = "semanticSettings";
   async function getAllIndexedEntries() {
     return new Promise((resolve) => {
       chrome.storage.local.get(STORAGE_KEY, (result) => {
@@ -62,4 +64,60 @@
   window.getAllChatContentForAccount = getAllChatContentForAccount;
   window.getAllIndexedEntries = getAllIndexedEntries;
   window.deleteChatContentForAccount = deleteChatContentForAccount;
+  async function putEmbedding(storageId, vector) {
+    const data = await chrome.storage.local.get(EMBEDDING_KEY);
+    const index = data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};
+    index[storageId] = vector;
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [EMBEDDING_KEY]: index }, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+  async function getAllEmbeddings() {
+    const data = await chrome.storage.local.get(EMBEDDING_KEY);
+    return data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};
+  }
+  async function deleteEmbeddingsForAccount(accountId) {
+    const data = await chrome.storage.local.get(EMBEDDING_KEY);
+    const all = data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};
+    const prefix = `${accountId}:`;
+    const filtered = {};
+    for (const [key, vec] of Object.entries(all)) {
+      if (!key.startsWith(prefix)) filtered[key] = vec;
+    }
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [EMBEDDING_KEY]: filtered }, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+  async function getSemanticSettings() {
+    const data = await chrome.storage.local.get(SEMANTIC_SETTINGS_KEY);
+    return data[SEMANTIC_SETTINGS_KEY] ?? null;
+  }
+  async function saveSemanticSettings(settings) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [SEMANTIC_SETTINGS_KEY]: settings }, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+  window.putEmbedding = putEmbedding;
+  window.getAllEmbeddings = getAllEmbeddings;
+  window.deleteEmbeddingsForAccount = deleteEmbeddingsForAccount;
+  window.getSemanticSettings = getSemanticSettings;
+  window.saveSemanticSettings = saveSemanticSettings;
 })();
