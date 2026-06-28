@@ -136,6 +136,7 @@ export async function searchContentHybrid(
   index: any,
   query: string,
   queryEmbedding?: number[] | null,
+  searchMode: 'text' | 'semantic' | 'hybrid' = 'hybrid',
 ): Promise<Array<{
   storageId: string;
   accountId: string;
@@ -146,8 +147,8 @@ export async function searchContentHybrid(
   // 1. Always run keyword search
   const keywordResults = searchContent(index, query);
 
-  // 2. No embedding → pure keyword fallback (graceful degradation)
-  if (!queryEmbedding || queryEmbedding.length === 0) {
+  // 2. No embedding or text mode -> pure keyword fallback (graceful degradation)
+  if (searchMode === 'text' || !queryEmbedding || queryEmbedding.length === 0) {
     return keywordResults;
   }
 
@@ -164,6 +165,28 @@ export async function searchContentHybrid(
   const semanticScoreMap = new Map<string, number>();
   for (const [storageId, vec] of Object.entries(embeddings)) {
     semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
+  }
+
+  // 4.5. Pure semantic search
+  if (searchMode === 'semantic') {
+    const merged = [];
+    if (semanticScoreMap.size > 0) {
+      const entries = await (window as any).getAllIndexedEntries() as Record<string, any>;
+      for (const [storageId, semScore] of semanticScoreMap.entries()) {
+        if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
+          const record = entries[storageId];
+          if (!record) continue;
+          merged.push({
+            storageId,
+            accountId: record.accountId,
+            chatId: record.chatId,
+            snippet: extractSnippet(record, query),
+            score: semScore,
+          });
+        }
+      }
+    }
+    return merged.sort((a, b) => b.score - a.score);
   }
 
   // 5. Build merged result map starting from keyword hits

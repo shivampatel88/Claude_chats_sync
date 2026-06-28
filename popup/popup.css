@@ -1072,3 +1072,115 @@ input {
 .index-status .index-btn:active {
   transform: translateY(0);
 }
+
+/* Custom Search Mode Segmented Controller (slimy-chipmunk-97) */
+.drawer-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.drawer-search-mode-section {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-inputs {
+  position: relative;
+  display: flex;
+  background-color: rgba(0, 0, 0, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), 0 0 0 1px var(--line);
+  border-radius: 8px;
+  padding: 4px;
+  width: 100%;
+}
+
+.radio-inputs .radio {
+  flex: 1 1 0%;
+  text-align: center;
+  z-index: 2;
+}
+
+.radio-inputs .radio input {
+  display: none;
+}
+
+.radio-inputs .radio .name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.25s ease;
+  user-select: none;
+}
+
+.radio-inputs .radio input:checked + .name {
+  color: #fff;
+  font-weight: 700;
+}
+
+.radio-inputs .radio:hover .name {
+  color: var(--text);
+}
+
+.radio-inputs .radio:active .name {
+  transform: scale(0.96);
+}
+
+/* Elastic & Shimmering indicator */
+.selection-indicator {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 6px;
+  background: linear-gradient(
+    120deg,
+    #d87a45 0%,
+    #eb925e 30%,
+    #fff9e6 50%,
+    #eb925e 70%,
+    #d87a45 100%
+  );
+  background-size: 200% auto;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: 0 4px 15px rgba(216, 122, 69, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  /* Slime-like elastic cubic bezier for stretching effect! */
+  transition: left 0.38s cubic-bezier(0.5, 1.4, 0.4, 1.01), right 0.38s cubic-bezier(0.5, 1.4, 0.4, 1.01);
+  animation: glitter 3s linear infinite;
+}
+
+@keyframes glitter {
+  0% {
+    background-position: 0% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.radio-inputs:has(.radio:nth-child(1) input:checked) .selection-indicator {
+  left: 4px;
+  right: calc(66.666% + 2px);
+}
+
+.radio-inputs:has(.radio:nth-child(2) input:checked) .selection-indicator {
+  left: calc(33.333% + 2px);
+  right: calc(33.333% + 2px);
+}
+
+.radio-inputs:has(.radio:nth-child(3) input:checked) .selection-indicator {
+  left: calc(66.666% + 2px);
+  right: 4px;
+}

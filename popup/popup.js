@@ -109,6 +109,7 @@ const STORAGE_KEYS = {
   currentAccountId: "currentAccountId",
   syncStatus: "syncStatus",
   pendingOpen: "pendingOpen",
+  searchMode: "searchMode",
 };
 
 const SYNC_KEYS = {
@@ -149,6 +150,7 @@ let state = {
   allowedIndexingAccounts: [], // list of accountIds that have indexing enabled
   // Phase B
   semanticSettings: null, // { enabled, apiKey } or null
+  searchMode: "hybrid", // Default search mode: 'text' | 'semantic' | 'hybrid'
 };
 
 // BUG-01 fix: re-entrancy guard — set to true while we are writing to chrome.storage.sync
@@ -1012,61 +1014,69 @@ function renderChats() {
 
   const queryRaw = state.query.trim();
   if (queryRaw && searchIndexHandle && window.searchContent) {
-    // Phase B: use hybrid search if semantic is enabled and a query embedding can be fetched
-    if (
+    const apiKey = (state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY;
+    const isSemanticPossible = !!(
       state.semanticSettings &&
       state.semanticSettings.enabled &&
-      state.semanticSettings.apiKey &&
+      apiKey &&
       window.searchContentHybrid &&
       window.generateEmbedding
-    ) {
-      // Run hybrid search asynchronously; fall back to keyword results immediately if the
-      // embedding API call fails or takes too long.
+    );
+
+    if (state.searchMode !== "text" && isSemanticPossible) {
+      // Run semantic or hybrid search asynchronously
       window
-        .generateEmbedding(
-          queryRaw,
-          state.semanticSettings.apiKey,
-        )
+        .generateEmbedding(queryRaw, apiKey)
         .then((queryEmbedding) => {
-          return window.searchContentHybrid(searchIndexHandle, queryRaw, queryEmbedding);
+          return window.searchContentHybrid(
+            searchIndexHandle,
+            queryRaw,
+            queryEmbedding,
+            state.searchMode,
+          );
         })
-        .then((hybridResults) => {
-          // Re-render with hybrid results only if query hasn't changed in the meantime
+        .then((results) => {
           if (state.query.trim() !== queryRaw) return;
-          const titleMatchIds = new Set(allChats.map((c) => c.storageId));
-          const finalChats = [...allChats];
-          for (const res of hybridResults) {
-            if (!titleMatchIds.has(res.storageId)) {
+          const finalChats = [];
+          if (state.searchMode === "semantic") {
+            // Pure semantic: only show semantic matches
+            for (const res of results) {
               const chatObj = state.chats[res.storageId];
               if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet });
-            } else {
-              const idx = finalChats.findIndex((c) => c.storageId === res.storageId);
-              if (idx !== -1) finalChats[idx] = { ...finalChats[idx], _snippet: res.snippet };
+            }
+          } else {
+            // Hybrid: start with keyword matches and merge semantic results
+            const titleMatchIds = new Set(allChats.map((c) => c.storageId));
+            finalChats.push(...allChats);
+            for (const res of results) {
+              if (!titleMatchIds.has(res.storageId)) {
+                const chatObj = state.chats[res.storageId];
+                if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet });
+              } else {
+                const idx = finalChats.findIndex((c) => c.storageId === res.storageId);
+                if (idx !== -1) finalChats[idx] = { ...finalChats[idx], _snippet: res.snippet };
+              }
             }
           }
-          // Re-draw chat list with hybrid results
           _renderChatListItems(list, summary, finalChats);
         })
         .catch(() => {
-          // API failed — keyword results already rendered below, nothing to do
+          // Falls back to keyword results
         });
     }
 
-    // Always render keyword results synchronously as the immediate baseline
+    // Keyword baseline (run synchronously)
     const contentResults = window.searchContent(searchIndexHandle, queryRaw);
     const titleMatchIds = new Set(allChats.map((c) => c.storageId));
 
-    // Merge: content matches that weren't already found by title
     for (const res of contentResults) {
       if (!titleMatchIds.has(res.storageId)) {
         const chatObj = state.chats[res.storageId];
         if (chatObj) {
-          // Clone it so we don't mutate the state object with the snippet
           const cloned = { ...chatObj, _snippet: res.snippet };
           allChats.push(cloned);
         }
       } else {
-        // If it WAS matched by title, also add the snippet if we have one
         const idx = allChats.findIndex((c) => c.storageId === res.storageId);
         if (idx !== -1) {
           allChats[idx] = { ...allChats[idx], _snippet: res.snippet };
@@ -1083,7 +1093,7 @@ function _renderChatListItems(list, summary, allChats) {
   list.replaceChildren();
   summary.textContent = state.query.trim()
     ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}${
-        state.semanticSettings && state.semanticSettings.enabled ? " \u26a1" : ""
+        state.searchMode === "text" ? "" : " \u26a1"
       }`
     : "Newest first, matching Claude Recents";
 
@@ -1171,6 +1181,7 @@ async function reloadData() {
     "starredChatIds", // restore per-profile starred chat pins
     "profileLocalId",
     "allowedIndexingAccounts",
+    "searchMode",
   ]);
   state.allowedIndexingAccounts = local.allowedIndexingAccounts || [];
   const synced = await readSyncedData();
@@ -1251,6 +1262,8 @@ async function reloadData() {
   if (window.buildSearchIndex) {
     searchIndexHandle = await window.buildSearchIndex();
   }
+
+  state.searchMode = local.searchMode || "hybrid";
 
   // Phase B: load semantic settings so search and badge UI are current
   if (window.getSemanticSettings) {
@@ -1715,42 +1728,55 @@ function bindEvents() {
 
   /** Sync the drawer UI elements to match current state.semanticSettings */
   function _syncSemanticDrawerState() {
-    const check = document.getElementById("semanticEnabledCheck");
     const badge = document.getElementById("semanticBadge");
+    const searchMode = state.searchMode || "hybrid";
 
-    const isEnabled = !!(state.semanticSettings && state.semanticSettings.enabled);
-    if (check) check.checked = isEnabled;
-    if (badge) badge.style.display = isEnabled ? "" : "none";
+    const radio = document.querySelector(`input[name="searchMode"][value="${searchMode}"]`);
+    if (radio) radio.checked = true;
+
+    if (badge) {
+      const isEnabled = (searchMode !== "text");
+      badge.style.display = isEnabled ? "" : "none";
+      badge.textContent = searchMode === "semantic" ? "⚡ Semantic" : "⚡ Hybrid";
+    }
   }
 
-  const semanticEnabledCheck = document.getElementById("semanticEnabledCheck");
-  if (semanticEnabledCheck) {
-    semanticEnabledCheck.addEventListener("change", async (e) => {
-      const enabled = e.target.checked;
-      const badge = document.getElementById("semanticBadge");
-      if (badge) badge.style.display = enabled ? "" : "none";
+  // Bind search mode radio changes
+  document.querySelectorAll('input[name="searchMode"]').forEach((radio) => {
+    radio.addEventListener("change", async (e) => {
+      const mode = e.target.value;
+      state.searchMode = mode;
 
-      const currentKey = state.semanticSettings ? state.semanticSettings.apiKey : "";
-      const newSettings = { enabled, apiKey: currentKey };
-      state.semanticSettings = newSettings;
-      if (window.saveSemanticSettings) {
-        await window.saveSemanticSettings(newSettings);
+      const enabled = (mode !== "text");
+      const apiKey = (state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY;
+      state.semanticSettings = { enabled, apiKey };
+
+      await storageSet({
+        searchMode: mode,
+        semanticSettings: state.semanticSettings,
+      });
+
+      // Update badge
+      const badge = document.getElementById("semanticBadge");
+      if (badge) {
+        badge.style.display = enabled ? "" : "none";
+        badge.textContent = mode === "semantic" ? "⚡ Semantic" : "⚡ Hybrid";
       }
 
-      if (enabled && currentKey) {
-        // Trigger embedding scan for current account
+      // Trigger scanning if we just enabled it and have an active account
+      if (enabled && apiKey) {
         const account = selectedAccountForActions() ||
           (state.currentAccountId ? state.accounts[state.currentAccountId] : null);
         if (account) triggerIndexing(account);
       }
+
+      // Refresh search results immediately
+      renderChats();
     });
-  }
+  });
 
-
-
-
-  // Show drawer on load if already enabled
-  if (state.semanticSettings && state.semanticSettings.enabled) {
+  // Show drawer on load if searchMode is semantic/hybrid
+  if (state.searchMode && state.searchMode !== "text") {
     const drawer = document.getElementById("semanticDrawer");
     if (drawer) {
       drawer.style.display = "";

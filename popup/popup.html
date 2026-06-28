@@ -68,14 +68,33 @@
     <!-- Phase B: Semantic Search Settings Drawer -->
     <div id="semanticDrawer" class="semantic-drawer" style="display:none">
       <div class="semantic-drawer-header">
-        <label class="semantic-toggle-label" for="semanticEnabledCheck">
-          <input type="checkbox" id="semanticEnabledCheck" class="semantic-checkbox">
-          <span>Semantic Search</span>
-          <span id="semanticBadge" class="semantic-badge" style="display:none">⚡ On</span>
-        </label>
+        <div class="drawer-header-title">
+          <span>Search Settings</span>
+          <span id="semanticBadge" class="semantic-badge" style="display:none">⚡ Hybrid</span>
+        </div>
         <button id="semanticCollapseBtn" class="icon-button semantic-collapse-btn" type="button" aria-label="Close settings" title="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
+      </div>
+
+      <!-- Search Mode Selection (slimy-chipmunk-97) -->
+      <div class="drawer-search-mode-section">
+        <div class="drawer-section-title">Search Mode</div>
+        <div class="radio-inputs">
+          <label class="radio">
+            <input type="radio" name="searchMode" value="text">
+            <span class="name">Text Search</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="searchMode" value="semantic">
+            <span class="name">Semantic Search</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="searchMode" value="hybrid" checked>
+            <span class="name">Hybrid (Both)</span>
+          </label>
+          <div class="selection-indicator"></div>
+        </div>
       </div>
 
 

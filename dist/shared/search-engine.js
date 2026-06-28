@@ -68,9 +68,9 @@
     }
     return normA === 0 || normB === 0 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB));
   }
-  async function searchContentHybrid(index, query, queryEmbedding) {
+  async function searchContentHybrid(index, query, queryEmbedding, searchMode = "hybrid") {
     const keywordResults = searchContent(index, query);
-    if (!queryEmbedding || queryEmbedding.length === 0) {
+    if (searchMode === "text" || !queryEmbedding || queryEmbedding.length === 0) {
       return keywordResults;
     }
     const rawScores = keywordResults.map((r) => r.score);
@@ -83,6 +83,26 @@
     const semanticScoreMap = /* @__PURE__ */ new Map();
     for (const [storageId, vec] of Object.entries(embeddings)) {
       semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
+    }
+    if (searchMode === "semantic") {
+      const merged2 = [];
+      if (semanticScoreMap.size > 0) {
+        const entries = await window.getAllIndexedEntries();
+        for (const [storageId, semScore] of semanticScoreMap.entries()) {
+          if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
+            const record = entries[storageId];
+            if (!record) continue;
+            merged2.push({
+              storageId,
+              accountId: record.accountId,
+              chatId: record.chatId,
+              snippet: extractSnippet(record, query),
+              score: semScore
+            });
+          }
+        }
+      }
+      return merged2.sort((a, b) => b.score - a.score);
     }
     const merged = /* @__PURE__ */ new Map();
     for (const r of keywordResults) {
