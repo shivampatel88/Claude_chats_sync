@@ -1957,7 +1957,7 @@
     if (message.type === "CCT_INDEX_ACCOUNT") {
       const { indexAccount } = window.__cctInternal || {};
       if (indexAccount) {
-        indexAccount(message.accountId, message.orgId).catch((err) =>
+        indexAccount(message.accountId, message.orgId, message.apiKey || null).catch((err) =>
           cctWarn("Index account failed:", err),
         );
       }

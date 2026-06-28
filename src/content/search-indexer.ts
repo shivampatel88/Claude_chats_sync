@@ -33,7 +33,7 @@ interface CctInternal {
   fetchRecentChats?: () => Promise<RecentChat[] | null>;
   fetchOrganizationId?: () => Promise<string | null>;
   queue?: IndexingQueue;
-  indexAccount?: (accountId: string, orgId: string) => Promise<void>;
+  indexAccount?: (accountId: string, orgId: string, apiKey?: string | null) => Promise<void>;
 }
 
 declare global {
@@ -162,19 +162,27 @@ export class IndexingQueue {
     orgId: string,
     chatIds: string[],
     updatedAtMap: Record<string, number> = {},
+    apiKey?: string | null,
   ): Promise<void> {
     cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
 
-    // Phase B: snapshot semantic settings into instance vars (key never goes into QueueState)
+    // Phase B: use the API key passed directly from the popup (avoids storage race condition).
+    // If not passed, fall back to reading from storage as a safety net.
     this.semanticEnabled = false;
     this.semanticApiKey = null;
     this.embeddingError = null;
-    if (window.getSemanticSettings) {
+
+    const resolvedKey = apiKey || null;
+    if (resolvedKey) {
+      this.semanticEnabled = true;
+      this.semanticApiKey = resolvedKey;
+      cctLog(`Semantic embedding enabled for this queue run (key provided directly)`);
+    } else if (window.getSemanticSettings) {
       const settings = await window.getSemanticSettings();
       if (settings && settings.enabled && settings.apiKey) {
         this.semanticEnabled = true;
         this.semanticApiKey = settings.apiKey;
-        cctLog(`Semantic embedding enabled for this queue run`);
+        cctLog(`Semantic embedding enabled for this queue run (key from storage)`);
       }
     }
 
@@ -355,7 +363,7 @@ export class IndexingQueue {
 
 // ─── 4. indexAccount ─────────────────────────────────────────────────
 
-export async function indexAccount(accountId: string, orgId: string): Promise<void> {
+export async function indexAccount(accountId: string, orgId: string, apiKey?: string | null): Promise<void> {
   cctLog(`indexAccount called for account ${accountId}`);
 
   const internalBridge = window.__cctInternal ?? {};
@@ -392,6 +400,11 @@ export async function indexAccount(accountId: string, orgId: string): Promise<vo
     indexedMap.set(record.chatId, record);
   }
 
+  // Load existing embeddings so we can detect chats already indexed but missing embeddings
+  const existingEmbeddings: Record<string, number[]> = window.getAllEmbeddings
+    ? await (window.getAllEmbeddings as () => Promise<Record<string, number[]>>)()
+    : {};
+
   // Build the updatedAt map once here — passed into the queue so processNext()
   // can do a plain lookup instead of re-calling fetchRecentChats() per chat.
   const updatedAtMap: Record<string, number> = {};
@@ -400,15 +413,17 @@ export async function indexAccount(accountId: string, orgId: string): Promise<vo
     const serverTime = chat.updatedAt ?? 0;
     updatedAtMap[chat.chatId] = serverTime;
     const existing = indexedMap.get(chat.chatId);
-    if (existing && existing.serverUpdatedAt === serverTime) {
-      // Already indexed and up to date
+    const storageId = `${accountId}:${chat.chatId}`;
+    const needsEmbedding = apiKey && !existingEmbeddings[storageId];
+    if (existing && existing.serverUpdatedAt === serverTime && !needsEmbedding) {
+      // Already indexed and up to date and embedding present (if semantic enabled)
       continue;
     }
     chatIdsToProcess.push(chat.chatId);
   }
 
   cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-  await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap);
+  await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
 }
 
 // ─── 5. waitForBridge ────────────────────────────────────────────────

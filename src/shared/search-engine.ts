@@ -241,8 +241,9 @@ export async function searchContentHybrid(
       chatId: r.chatId,
       snippet: r.snippet,
       score: (r.normalizedKeyword * KEYWORD_WEIGHT) + (r.semanticScore * SEMANTIC_WEIGHT),
+      hasKeyword: r.normalizedKeyword > 0,
     }))
-    .filter((r) => r.score >= MIN_COMBINED_SCORE)
+    .filter((r) => r.hasKeyword || r.score >= MIN_COMBINED_SCORE)
     .sort((a, b) => b.score - a.score);
 }
 

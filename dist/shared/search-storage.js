@@ -64,6 +64,7 @@
   window.getAllChatContentForAccount = getAllChatContentForAccount;
   window.getAllIndexedEntries = getAllIndexedEntries;
   window.deleteChatContentForAccount = deleteChatContentForAccount;
+  window.getAllEmbeddings = getAllEmbeddings;
   async function putEmbedding(storageId, vector) {
     const data = await chrome.storage.local.get(EMBEDDING_KEY);
     const index = data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};

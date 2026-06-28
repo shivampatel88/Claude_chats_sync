@@ -73,17 +73,22 @@
     async saveState(state) {
       await chrome.storage.local.set({ [this.key]: state });
     }
-    async start(accountId, orgId, chatIds, updatedAtMap = {}) {
+    async start(accountId, orgId, chatIds, updatedAtMap = {}, apiKey) {
       cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
       this.semanticEnabled = false;
       this.semanticApiKey = null;
       this.embeddingError = null;
-      if (window.getSemanticSettings) {
+      const resolvedKey = apiKey || null;
+      if (resolvedKey) {
+        this.semanticEnabled = true;
+        this.semanticApiKey = resolvedKey;
+        cctLog(`Semantic embedding enabled for this queue run (key provided directly)`);
+      } else if (window.getSemanticSettings) {
         const settings = await window.getSemanticSettings();
         if (settings && settings.enabled && settings.apiKey) {
           this.semanticEnabled = true;
           this.semanticApiKey = settings.apiKey;
-          cctLog(`Semantic embedding enabled for this queue run`);
+          cctLog(`Semantic embedding enabled for this queue run (key from storage)`);
         }
       }
       const state = {
@@ -221,7 +226,7 @@
       };
     }
   }
-  async function indexAccount(accountId, orgId) {
+  async function indexAccount(accountId, orgId, apiKey) {
     cctLog(`indexAccount called for account ${accountId}`);
     const internalBridge = window.__cctInternal ?? {};
     if (!orgId) {
@@ -251,19 +256,22 @@
     for (const record of indexedRecords) {
       indexedMap.set(record.chatId, record);
     }
+    const existingEmbeddings = window.getAllEmbeddings ? await window.getAllEmbeddings() : {};
     const updatedAtMap = {};
     const chatIdsToProcess = [];
     for (const chat of recentChats) {
       const serverTime = chat.updatedAt ?? 0;
       updatedAtMap[chat.chatId] = serverTime;
       const existing = indexedMap.get(chat.chatId);
-      if (existing && existing.serverUpdatedAt === serverTime) {
+      const storageId = `${accountId}:${chat.chatId}`;
+      const needsEmbedding = apiKey && !existingEmbeddings[storageId];
+      if (existing && existing.serverUpdatedAt === serverTime && !needsEmbedding) {
         continue;
       }
       chatIdsToProcess.push(chat.chatId);
     }
     cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-    await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap);
+    await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
   }
   async function waitForBridge() {
     const timeoutMs = 3e4;

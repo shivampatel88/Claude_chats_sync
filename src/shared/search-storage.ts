@@ -93,6 +93,7 @@ export async function deleteChatContentForAccount(accountId: string): Promise<nu
 (window as any).getAllChatContentForAccount = getAllChatContentForAccount;
 (window as any).getAllIndexedEntries = getAllIndexedEntries;
 (window as any).deleteChatContentForAccount = deleteChatContentForAccount;
+(window as any).getAllEmbeddings = getAllEmbeddings;
 
 // ─── Phase B: Embedding Storage ──────────────────────────────────────
 
