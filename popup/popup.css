@@ -1195,6 +1195,20 @@ input {
   transform: translateY(0);
 }
 
+.embedding-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 2px 0;
+}
+
+.embedding-actions-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
 /* Custom Search Mode Segmented Controller (slimy-chipmunk-97) */
 .drawer-header-title {
   display: flex;

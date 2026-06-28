@@ -148,6 +148,7 @@ let state = {
   starredChatIds: new Set(), // storageId strings — starred chats always sort to top
   profileLocalId: "",
   allowedIndexingAccounts: [], // list of accountIds that have indexing enabled
+  allAccountsIndexingEnabled: false, // global auto-index toggle
   // Phase B
   semanticSettings: null, // { enabled, apiKey } or null
   searchMode: "hybrid", // Default search mode: 'text' | 'semantic' | 'hybrid'
@@ -386,6 +387,7 @@ async function persistData({
       chats,
       currentAccountId,
       allowedIndexingAccounts: state.allowedIndexingAccounts,
+      allAccountsIndexingEnabled: state.allAccountsIndexingEnabled,
     });
 
     const synced = await readSyncedData();
@@ -533,17 +535,40 @@ function renderStatus() {
   }
 
   const actionArea = document.getElementById("accountActionArea");
-  if (actionArea) {
-    actionArea.style.display =
-      state.activeAccountId === "all" ? "none" : "flex";
-  }
+  const globalArea = document.getElementById("globalActionArea");
 
-  const account = selectedAccountForActions();
-  if (account && state.activeAccountId !== "all") {
-    updateIndexStatusUI(account);
-  } else if (indexProgressPollTimer) {
-    clearInterval(indexProgressPollTimer);
-    indexProgressPollTimer = null;
+  if (state.activeAccountId === "all") {
+    if (actionArea) actionArea.style.display = "none";
+    if (globalArea) {
+      globalArea.style.display = "flex";
+      const statusText = document.getElementById("globalIndexStatusText");
+      const toggleBtn = document.getElementById("globalIndexToggleBtn");
+      const isGlobalEnabled = !!state.allAccountsIndexingEnabled;
+      if (statusText) statusText.textContent = isGlobalEnabled ? "On" : "Off";
+      if (toggleBtn) {
+        toggleBtn.textContent = isGlobalEnabled ? "Turn Off" : "Turn On";
+        toggleBtn.setAttribute(
+          "data-tooltip",
+          isGlobalEnabled
+            ? "Turn off auto-indexing for all accounts"
+            : "Automatically enable indexing for all accounts when selected"
+        );
+      }
+    }
+    if (indexProgressPollTimer) {
+      clearInterval(indexProgressPollTimer);
+      indexProgressPollTimer = null;
+    }
+  } else {
+    if (globalArea) globalArea.style.display = "none";
+    if (actionArea) actionArea.style.display = "flex";
+    const account = selectedAccountForActions();
+    if (account) {
+      updateIndexStatusUI(account);
+    } else if (indexProgressPollTimer) {
+      clearInterval(indexProgressPollTimer);
+      indexProgressPollTimer = null;
+    }
   }
 }
 
@@ -564,7 +589,19 @@ async function updateIndexStatusUI(account) {
   const renderIndexStatus = async () => {
     statusContainer.replaceChildren();
 
-    const isEnabled = state.allowedIndexingAccounts.includes(account.accountId);
+    const isEnabled = !!(state.allAccountsIndexingEnabled || state.allowedIndexingAccounts.includes(account.accountId));
+
+    const local = await storageGet(["indexingQueue"]);
+    const q = local.indexingQueue;
+
+    // Auto-trigger scanning if enabled, idle/unstarted, and currently logged in on the Claude tab
+    if (
+      isEnabled &&
+      account.accountId === state.currentAccountId &&
+      (!q || q.accountId !== account.accountId || q.status === "idle")
+    ) {
+      triggerIndexing(account, true);
+    }
 
     if (!isEnabled) {
       const label = document.createElement("span");
@@ -585,9 +622,6 @@ async function updateIndexStatusUI(account) {
       return;
     }
 
-    const local = await storageGet(["indexingQueue"]);
-    const q = local.indexingQueue;
-
     const statusLabel = document.createElement("span");
 
     const disableBtn = document.createElement("button");
@@ -595,6 +629,11 @@ async function updateIndexStatusUI(account) {
     disableBtn.textContent = "Turn Off";
     disableBtn.setAttribute("data-tooltip", "Turn off indexing & delete local database");
     disableBtn.onclick = async () => {
+      if (state.allAccountsIndexingEnabled) {
+        alert("All-account indexing is currently enabled. Turn off 'Auto-index all accounts' under 'All Accounts Settings' first to manage individual accounts.");
+        return;
+      }
+
       if (
         confirm(
           "Turn off message search for this account? This will delete the local search database for this account.",
@@ -669,28 +708,71 @@ async function updateIndexStatusUI(account) {
   };
 
   await renderIndexStatus();
+
+  // ── Embedding Actions Row ─────────────────────────────────────────
+  const embeddingActionsRow = document.getElementById("embeddingActionsRow");
+  const embeddingCountLabel = document.getElementById("embeddingCountLabel");
+  const deleteEmbeddingsBtn = document.getElementById("deleteEmbeddingsBtn");
+
+  if (embeddingActionsRow && account && window.getAllEmbeddings) {
+    const allEmbeddings = await window.getAllEmbeddings();
+    const prefix = account.accountId + ":";
+    const count = Object.keys(allEmbeddings).filter((k) => k.startsWith(prefix)).length;
+
+    if (count > 0) {
+      embeddingActionsRow.style.display = "flex";
+      if (embeddingCountLabel) {
+        embeddingCountLabel.textContent = `${count} embedding${count === 1 ? "" : "s"} stored`;
+      }
+      if (deleteEmbeddingsBtn) {
+        // Remove any previous listener by cloning the button
+        const fresh = deleteEmbeddingsBtn.cloneNode(true);
+        deleteEmbeddingsBtn.replaceWith(fresh);
+        fresh.addEventListener("click", async () => {
+          if (!confirm(`Delete all ${count} stored embeddings for ${shortAccountName(account)}? Semantic search will fall back to keyword-only until you rescan.`)) return;
+          if (window.deleteEmbeddingsForAccount) {
+            await window.deleteEmbeddingsForAccount(account.accountId);
+          }
+          embeddingActionsRow.style.display = "none";
+          if (embeddingCountLabel) embeddingCountLabel.textContent = "";
+        });
+      }
+    } else {
+      embeddingActionsRow.style.display = "none";
+    }
+  }
 }
 
-async function triggerIndexing(account) {
+async function triggerIndexing(account, isAuto = false) {
   const tabs = await chrome.tabs.query({
     url: "https://claude.ai/*",
     active: true,
     currentWindow: true,
   });
   if (tabs.length === 0) {
-    alert("Please open a claude.ai tab first to start indexing.");
+    if (!isAuto) {
+      alert("Please open a claude.ai tab first to start indexing.");
+    }
     return;
   }
 
   const statusContainer = document.getElementById("indexStatusContainer");
   if (statusContainer) statusContainer.textContent = "Starting...";
 
-  // The content script will fetch the orgId if we don't have it
+  // The content script will fetch the orgId if we don't have it.
+  // Only pass the API key if the user has semantic or hybrid mode enabled.
+  // In pure text mode, skip embedding entirely.
+  const wantsEmbedding = state.searchMode !== "text";
+  const embeddingApiKey = wantsEmbedding
+    ? ((state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY || null)
+    : null;
+
   chrome.tabs
     .sendMessage(tabs[0].id, {
       type: "CCT_INDEX_ACCOUNT",
       accountId: account.accountId,
       orgId: null,
+      apiKey: embeddingApiKey,
     })
     .catch(() => {
       alert(
@@ -1133,10 +1215,20 @@ function renderChats() {
 // Extracted renderer so the hybrid-search async re-render path can reuse it.
 function _renderChatListItems(list, summary, allChats) {
   list.replaceChildren();
+
+  let modeSuffix = "";
+  if (state.query.trim()) {
+    if (state.searchMode === "text") {
+      modeSuffix = " (Text)";
+    } else if (state.searchMode === "semantic") {
+      modeSuffix = " (Semantic \u26a1)";
+    } else {
+      modeSuffix = " (Hybrid \u26a1)";
+    }
+  }
+
   summary.textContent = state.query.trim()
-    ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}${
-        state.searchMode === "text" ? "" : " \u26a1"
-      }`
+    ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}${modeSuffix}`
     : "Newest first, matching Claude Recents";
 
   if (allChats.length === 0) {
@@ -1223,9 +1315,11 @@ async function reloadData() {
     "starredChatIds", // restore per-profile starred chat pins
     "profileLocalId",
     "allowedIndexingAccounts",
+    "allAccountsIndexingEnabled",
     "searchMode",
   ]);
   state.allowedIndexingAccounts = local.allowedIndexingAccounts || [];
+  state.allAccountsIndexingEnabled = !!local.allAccountsIndexingEnabled;
   const synced = await readSyncedData();
   const deletedAccounts = synced.deletedAccounts || {};
 
@@ -1436,6 +1530,23 @@ function bindEvents() {
     document.addEventListener("click", () => {
       if (acctContainer) acctContainer.classList.remove("open");
       if (filterMenu) filterMenu.style.display = "none";
+    });
+  }
+
+  const globalIndexToggleBtn = document.getElementById("globalIndexToggleBtn");
+  if (globalIndexToggleBtn) {
+    globalIndexToggleBtn.addEventListener("click", async () => {
+      state.allAccountsIndexingEnabled = !state.allAccountsIndexingEnabled;
+      await persistData();
+
+      // If enabled globally, auto-trigger for the currently active tab account (if matches)
+      if (state.allAccountsIndexingEnabled) {
+        const activeAcct = state.accounts[state.currentAccountId];
+        if (activeAcct) {
+          triggerIndexing(activeAcct, true);
+        }
+      }
+      render();
     });
   }
 
@@ -1836,14 +1947,6 @@ function bindEvents() {
     });
   });
 
-  // Show drawer on load if searchMode is semantic/hybrid
-  if (state.searchMode && state.searchMode !== "text") {
-    const drawer = document.getElementById("semanticDrawer");
-    if (drawer) {
-      drawer.style.display = "";
-      _syncSemanticDrawerState();
-    }
-  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
