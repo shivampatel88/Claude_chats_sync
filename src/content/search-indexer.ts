@@ -47,7 +47,8 @@ declare global {
     // Phase B
     putEmbedding?: (storageId: string, vector: number[]) => Promise<void>;
     generateEmbedding?: (text: string, apiKey: string) => Promise<number[]>;
-    getSemanticSettings?: () => Promise<{ enabled: boolean; apiKey: string } | null>;
+    getSemanticSettings?: () => Promise<{ enabled: boolean; apiKey: string; lastEmbeddedAt?: number } | null>;
+    saveSemanticSettings?: (settings: { enabled: boolean; apiKey: string; lastEmbeddedAt?: number }) => Promise<void>;
     getAllEmbeddings?: () => Promise<Record<string, number[]>>;
   }
 }
@@ -264,6 +265,20 @@ export class IndexingQueue {
         cctLog(`Queue complete!`);
         state.status = 'complete';
         await this.saveState(state);
+
+        // Phase B: record completion timestamp so the popup can display
+        // "last embedded N days ago" in the settings panel.
+        if (this.semanticEnabled && window.getSemanticSettings && window.saveSemanticSettings) {
+          try {
+            const settings = await window.getSemanticSettings();
+            if (settings) {
+              await window.saveSemanticSettings({ ...settings, lastEmbeddedAt: Date.now() });
+            }
+          } catch (_) {
+            // Non-fatal: missing lastEmbeddedAt is cosmetic.
+          }
+        }
+
         return;
       }
 
@@ -386,6 +401,15 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
     }
   }
 
+  // Safety guard: ensure the active tab's logged-in account matches the account requested.
+  // This prevents writing the active session's chats into a background account's index.
+  const expectedAccountId = `acc_org_${orgId.replace(/[^a-z0-9]/gi, '').slice(0, 16)}`;
+  if (accountId !== expectedAccountId) {
+    cctWarn(`Account mismatch: requested ${accountId} but active tab is ${expectedAccountId}`);
+    alert("Account mismatch:\nYou are currently logged in to a different account on this Claude tab. Please switch to this account in Claude before scanning.");
+    return;
+  }
+
   if (!internalBridge.fetchRecentChats) {
     cctWarn(`fetchRecentChats not available on bridge`);
     return;
@@ -422,7 +446,8 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
     const existing = indexedMap.get(chat.chatId);
     const storageId = `${accountId}:${chat.chatId}`;
     const needsEmbedding = apiKey && !existingEmbeddings[storageId];
-    if (existing && existing.serverUpdatedAt === serverTime && !needsEmbedding) {
+    const isUpToDate = existing && existing.serverUpdatedAt > 0 && existing.serverUpdatedAt === serverTime;
+    if (isUpToDate && !needsEmbedding) {
       // Already indexed and up to date and embedding present (if semantic enabled)
       continue;
     }
@@ -465,3 +490,14 @@ export const queue = new IndexingQueue();
 window.__cctInternal = window.__cctInternal ?? {};
 window.__cctInternal.queue = queue;
 window.__cctInternal.indexAccount = indexAccount;
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    queue.loadState().then((state) => {
+      if (state && state.status === 'paused-tab-hidden') {
+        cctLog('Tab became visible, resuming queue...');
+        queue.resume();
+      }
+    });
+  }
+});

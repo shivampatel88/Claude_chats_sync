@@ -20,9 +20,19 @@ const OUTPUT_DIMENSIONS = 768;
  * @throws generic Error for other HTTP failures
  */
 export async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
-  const res = await fetch(`${GEMINI_EMBED_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+  // Guard against token-limit rejections — same cap the indexer queue uses.
+  if (text.length > 2000) {
+    throw new Error(`Input too long: ${text.length} chars (max 2000)`);
+  }
+
+  // API key sent as a header instead of a URL query param so it does not
+  // appear in browser DevTools network logs, proxies, or server access logs.
+  const res = await fetch(GEMINI_EMBED_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify({
       model: 'models/gemini-embedding-001',
       content: { parts: [{ text }] },

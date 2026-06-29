@@ -373,6 +373,7 @@ async function persistData({
   chats = state.chats,
   currentAccountId = state.currentAccountId,
 } = {}) {
+  while (isSyncing) await new Promise(r => setTimeout(r, 50));
   state.accounts = accounts;
   state.chats = chats;
   state.currentAccountId = currentAccountId;
@@ -812,10 +813,14 @@ async function triggerIndexing(account, isAuto = false) {
       orgId: null,
       apiKey: embeddingApiKey,
     })
-    .catch(() => {
-      alert(
-        "Could not reach Claude tab. Please refresh the claude.ai page and try again.",
-      );
+    .catch((err) => {
+      if (!isAuto) {
+        alert(
+          "Could not reach Claude tab. Please refresh the claude.ai page and try again.",
+        );
+      } else {
+        console.warn("[CCT] Auto-indexing call failed: could not reach Claude tab.", err);
+      }
     });
 
   if (!indexProgressPollTimer) {
@@ -1175,9 +1180,10 @@ function renderChats() {
   const summary = document.getElementById("searchSummary");
 
   const queryRaw = state.query.trim();
+  let isSemanticPossible = false;
   if (queryRaw && searchIndexHandle && window.searchContent) {
     const apiKey = (state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY;
-    const isSemanticPossible = !!(
+    isSemanticPossible = !!(
       state.semanticSettings &&
       state.semanticSettings.enabled &&
       apiKey &&
@@ -1186,6 +1192,9 @@ function renderChats() {
     );
 
     if (state.searchMode !== "text" && isSemanticPossible) {
+      const activeAccountAtTrigger = state.activeAccountId;
+      const searchModeAtTrigger = state.searchMode;
+
       // Run semantic or hybrid search asynchronously
       window
         .generateEmbedding(queryRaw, apiKey)
@@ -1195,10 +1204,11 @@ function renderChats() {
             queryRaw,
             queryEmbedding,
             state.searchMode,
+            state.activeAccountId,
           );
         })
         .then((results) => {
-          if (state.query.trim() !== queryRaw) return;
+          if (state.query.trim() !== queryRaw || state.activeAccountId !== activeAccountAtTrigger || state.searchMode !== searchModeAtTrigger) return;
           const finalChats = [];
           if (state.searchMode === "semantic") {
             // Pure semantic: only show semantic matches
@@ -1220,39 +1230,58 @@ function renderChats() {
               }
             }
           }
+          finalChats.sort(compareChats);
           _renderChatListItems(list, summary, finalChats);
         })
-        .catch(() => {
-          // Falls back to keyword results
+        .catch((err) => {
+          console.warn("Semantic search failed:", err);
+          const isRateLimit = String(err).includes('RATE_LIMITED') || String(err).includes('429');
+          summary.textContent = isRateLimit 
+            ? "Semantic search paused (Rate Limited). Showing keyword results." 
+            : "Semantic search failed. Showing keyword results.";
+          summary.classList.add("rate-limit-warning");
         });
     }
 
-    // Keyword baseline (run synchronously)
-    const contentResults = window.searchContent(searchIndexHandle, queryRaw);
-    const titleMatchIds = new Set(allChats.map((c) => c.storageId));
+    if (state.searchMode !== "semantic") {
+      // Keyword baseline (run synchronously)
+      const contentResults = window.searchContent(searchIndexHandle, queryRaw);
+      const titleMatchIds = new Set(allChats.map((c) => c.storageId));
 
-    for (const res of contentResults) {
-      if (!titleMatchIds.has(res.storageId)) {
-        const chatObj = state.chats[res.storageId];
-        if (chatObj) {
-          const cloned = { ...chatObj, _snippet: res.snippet };
-          allChats.push(cloned);
-        }
-      } else {
-        const idx = allChats.findIndex((c) => c.storageId === res.storageId);
-        if (idx !== -1) {
-          allChats[idx] = { ...allChats[idx], _snippet: res.snippet };
+      for (const res of contentResults) {
+        if (!titleMatchIds.has(res.storageId)) {
+          const chatObj = state.chats[res.storageId];
+          if (chatObj) {
+            const cloned = { ...chatObj, _snippet: res.snippet };
+            allChats.push(cloned);
+          }
+        } else {
+          const idx = allChats.findIndex((c) => c.storageId === res.storageId);
+          if (idx !== -1) {
+            allChats[idx] = { ...allChats[idx], _snippet: res.snippet };
+          }
         }
       }
+    } else {
+       list.replaceChildren();
+       const loading = document.createElement("div");
+       loading.className = "empty-state";
+       loading.textContent = "Searching semantically...";
+       list.appendChild(loading);
+       return;
     }
   }
 
   _renderChatListItems(list, summary, allChats);
+  if (queryRaw && searchIndexHandle && window.searchContent && state.searchMode === "hybrid" && isSemanticPossible) {
+    summary.textContent = summary.textContent.replace(" (Hybrid ⚡)", " (Searching semantically...)");
+  }
 }
 
 // Extracted renderer so the hybrid-search async re-render path can reuse it.
 function _renderChatListItems(list, summary, allChats) {
   list.replaceChildren();
+  summary.classList.remove("rate-limit-warning");
 
   let modeSuffix = "";
   if (state.query.trim()) {
@@ -1555,9 +1584,13 @@ async function createAccount() {
 }
 
 function bindEvents() {
+  let searchDebounceTimeout = null;
   document.getElementById("searchInput").addEventListener("input", (event) => {
     state.query = event.target.value;
-    renderChats();
+    clearTimeout(searchDebounceTimeout);
+    searchDebounceTimeout = setTimeout(() => {
+      renderChats();
+    }, 300);
   });
 
   // Custom account selector trigger dropdown toggle
@@ -1857,7 +1890,9 @@ function bindEvents() {
     exportDiagBtn.addEventListener("click", async () => {
       try {
         const log = await window.cctDiag.export();
-        const blob = new Blob([JSON.stringify(log, null, 2)], {
+        let logString = JSON.stringify(log, null, 2);
+        logString = logString.replace(/AIza[a-zA-Z0-9_-]{35}/g, "[REDACTED_API_KEY]");
+        const blob = new Blob([logString], {
           type: "application/json",
         });
         const url = URL.createObjectURL(blob);
@@ -1973,7 +2008,7 @@ function bindEvents() {
 
       const enabled = (mode !== "text");
       const apiKey = (state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY;
-      state.semanticSettings = { enabled, apiKey };
+      state.semanticSettings = { ...state.semanticSettings, enabled, apiKey };
 
       await storageSet({
         searchMode: mode,
@@ -2001,7 +2036,14 @@ function bindEvents() {
 
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
+  if (window.migrateLegacyData) {
+    try {
+      await window.migrateLegacyData();
+    } catch (e) {
+      console.error("Migration failed:", e);
+    }
+  }
   reloadData();
 });

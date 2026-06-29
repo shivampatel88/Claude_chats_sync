@@ -1,3 +1,5 @@
+// src/shared/search-storage.ts
+
 export interface ChatContentRecord {
   storageId: string;       // format: "accountId:chatId"
   accountId: string;
@@ -8,47 +10,123 @@ export interface ChatContentRecord {
   serverUpdatedAt: number; // from Claude API, used to detect staleness
 }
 
-// ─── Phase B: Semantic Settings ──────────────────────────────────────
-// Stored only in chrome.storage.local (never sync) so API keys don't roam
-// across Chrome profiles / devices.
-
 export interface SemanticSettings {
   enabled: boolean;
   apiKey: string;           // Google AI API key (AIza...) — local only
   lastEmbeddedAt?: number;  // Date.now() after last successful embedding scan
 }
 
-const STORAGE_KEY = 'searchIndex';
-
-// Separate key for embeddings — never mixed into the content index so
-// getAllIndexedEntries() stays fast and lean even with many chats embedded.
-const EMBEDDING_KEY = 'embeddingIndex';
-
+const STORAGE_KEY_PREFIX = 'searchIndex_';
+const EMBEDDING_KEY_PREFIX = 'embeddingIndex_';
+const LEGACY_STORAGE_KEY = 'searchIndex';
+const LEGACY_EMBEDDING_KEY = 'embeddingIndex';
 const SEMANTIC_SETTINGS_KEY = 'semanticSettings';
+
+// ─── READ helpers ──────────────────────────────────────────────────
 
 export async function getAllIndexedEntries(): Promise<Record<string, ChatContentRecord>> {
   return new Promise((resolve) => {
-    chrome.storage.local.get(STORAGE_KEY, (result) => {
+    chrome.storage.local.get(null, (items) => {
       if (chrome.runtime.lastError) {
         resolve({});
         return;
       }
-      const index = result[STORAGE_KEY];
-      resolve((index && typeof index === 'object' ? index : {}) as Record<string, ChatContentRecord>);
+      const all: Record<string, ChatContentRecord> = {};
+
+      // Step 1: legacy data (fallback) – loaded first so per‑account can override
+      if (items[LEGACY_STORAGE_KEY] && typeof items[LEGACY_STORAGE_KEY] === 'object') {
+        Object.assign(all, items[LEGACY_STORAGE_KEY]);
+      }
+
+      // Step 2: per‑account data – takes precedence over legacy
+      for (const [key, value] of Object.entries(items)) {
+        if (key.startsWith(STORAGE_KEY_PREFIX) && typeof value === 'object') {
+          Object.assign(all, value);
+        }
+      }
+
+      resolve(all);
     });
   });
 }
 
-export async function putChatContent(record: ChatContentRecord): Promise<void> {
-  const index = await getAllIndexedEntries();
-  index[record.storageId] = record;
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set({ [STORAGE_KEY]: index }, () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
+export async function getAllEmbeddings(): Promise<Record<string, number[]>> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(null, (items) => {
+      const all: Record<string, number[]> = {};
+
+      // Step 1: legacy
+      if (items[LEGACY_EMBEDDING_KEY] && typeof items[LEGACY_EMBEDDING_KEY] === 'object') {
+        Object.assign(all, items[LEGACY_EMBEDDING_KEY]);
       }
-      resolve();
+
+      // Step 2: per‑account
+      for (const [key, value] of Object.entries(items)) {
+        if (key.startsWith(EMBEDDING_KEY_PREFIX) && typeof value === 'object') {
+          Object.assign(all, value);
+        }
+      }
+
+      resolve(all);
+    });
+  });
+}
+
+/**
+ * Load embeddings for a single account only.
+ * Reads only the per‑account key plus any matching legacy entries, so cosine
+ * similarity in hybrid search cannot return results from other accounts.
+ */
+export async function getAllEmbeddingsForAccount(accountId: string): Promise<Record<string, number[]>> {
+  const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
+  return new Promise((resolve) => {
+    chrome.storage.local.get([accountKey, LEGACY_EMBEDDING_KEY], (items) => {
+      const all: Record<string, number[]> = {};
+
+      // Legacy entries that belong to this account (identified by storageId prefix)
+      if (items[LEGACY_EMBEDDING_KEY] && typeof items[LEGACY_EMBEDDING_KEY] === 'object') {
+        const prefix = `${accountId}:`;
+        for (const [k, v] of Object.entries(items[LEGACY_EMBEDDING_KEY] as Record<string, number[]>)) {
+          if (k.startsWith(prefix)) all[k] = v;
+        }
+      }
+
+      // Per‑account key takes precedence
+      if (items[accountKey] && typeof items[accountKey] === 'object') {
+        Object.assign(all, items[accountKey]);
+      }
+
+      resolve(all);
+    });
+  });
+}
+
+// ─── WRITE helpers ─────────────────────────────────────────────────
+
+/**
+ * Write a single chat content record to its per‑account search index key.
+ *
+ * CONCURRENCY NOTE: callers must serialize writes for the same account.
+ * The IndexingQueue.isProcessing flag does this for the background indexer.
+ * If called from outside the queue, the caller is responsible for preventing
+ * concurrent read-modify-write races on the same accountKey.
+ */
+export async function putChatContent(record: ChatContentRecord): Promise<void> {
+  const accountKey = `${STORAGE_KEY_PREFIX}${record.accountId}`;
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(accountKey, (result) => {
+      const index: Record<string, ChatContentRecord> =
+        (result[accountKey] && typeof result[accountKey] === 'object')
+          ? (result[accountKey] as Record<string, ChatContentRecord>)
+          : {};
+      index[record.storageId] = record;
+      chrome.storage.local.set({ [accountKey]: index }, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
     });
   });
 }
@@ -63,42 +141,99 @@ export async function getChatContent(storageId: string): Promise<ChatContentReco
 }
 
 export async function getAllChatContentForAccount(accountId: string): Promise<ChatContentRecord[]> {
-  const index = await getAllIndexedEntries();
-  return Object.values(index).filter((record) => record.accountId === accountId);
+  const accountKey = `${STORAGE_KEY_PREFIX}${accountId}`;
+  return new Promise((resolve) => {
+    chrome.storage.local.get([accountKey, LEGACY_STORAGE_KEY], (result) => {
+      const index = (result[accountKey] && typeof result[accountKey] === 'object') ? result[accountKey] : {};
+      const legacyIndex = (result[LEGACY_STORAGE_KEY] && typeof result[LEGACY_STORAGE_KEY] === 'object') ? result[LEGACY_STORAGE_KEY] : {};
+      
+      const combined = { ...legacyIndex, ...index }; // per‑account overrides legacy (same key)
+      const records = Object.values(combined) as ChatContentRecord[];
+      resolve(records.filter((record) => record.accountId === accountId));
+    });
+  });
 }
+
+// ─── DELETE helpers (with legacy cleanup) ───────────────────────────
 
 export async function deleteChatContentForAccount(accountId: string): Promise<number> {
-  const index = await getAllIndexedEntries();
-  const keysToDelete = Object.keys(index).filter((key) => index[key].accountId === accountId);
-  for (const key of keysToDelete) {
-    delete index[key];
-  }
-  if (keysToDelete.length > 0) {
-    await new Promise<void>((resolve, reject) => {
-      chrome.storage.local.set({ [STORAGE_KEY]: index }, () => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve();
-      });
+  // 1. Count total records (legacy + per‑account)
+  const records = await getAllChatContentForAccount(accountId);
+  let totalDeleted = records.length;
+
+  // 2. Remove the per‑account key entirely
+  const accountKey = `${STORAGE_KEY_PREFIX}${accountId}`;
+  await new Promise<void>((resolve, reject) => {
+    chrome.storage.local.remove(accountKey, () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
     });
+  });
+
+  // 3. Prune the account’s entries from the legacy key (if any)
+  const legacy = await new Promise<Record<string, any>>((resolve) => {
+    chrome.storage.local.get(LEGACY_STORAGE_KEY, (res) => resolve(res));
+  });
+  const legacyIndex = legacy[LEGACY_STORAGE_KEY];
+  if (legacyIndex && typeof legacyIndex === 'object') {
+    let legacyChanged = false;
+    for (const k of Object.keys(legacyIndex)) {
+      if (legacyIndex[k] && legacyIndex[k].accountId === accountId) {
+        delete legacyIndex[k];
+        legacyChanged = true;
+      }
+    }
+    if (legacyChanged) {
+      if (Object.keys(legacyIndex).length === 0) {
+        await chrome.storage.local.remove(LEGACY_STORAGE_KEY);
+      } else {
+        await chrome.storage.local.set({ [LEGACY_STORAGE_KEY]: legacyIndex });
+      }
+    }
   }
-  return keysToDelete.length;
+
+  return totalDeleted;
 }
 
-// Expose on window so popup.js (plain JS) can call these functions
-(window as any).putChatContent = putChatContent;
-(window as any).getChatContent = getChatContent;
-(window as any).getAllChatContentForAccount = getAllChatContentForAccount;
-(window as any).getAllIndexedEntries = getAllIndexedEntries;
-(window as any).deleteChatContentForAccount = deleteChatContentForAccount;
-(window as any).getAllEmbeddings = getAllEmbeddings;
+export async function deleteEmbeddingsForAccount(accountId: string): Promise<void> {
+  // 1. Remove the per‑account embedding key
+  const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
+  await new Promise<void>((resolve, reject) => {
+    chrome.storage.local.remove(accountKey, () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+
+  // 2. Prune the account’s embeddings from the legacy key
+  const legacy = await new Promise<Record<string, any>>((resolve) => {
+    chrome.storage.local.get(LEGACY_EMBEDDING_KEY, (res) => resolve(res));
+  });
+  const legacyIndex = legacy[LEGACY_EMBEDDING_KEY];
+  if (legacyIndex && typeof legacyIndex === 'object') {
+    const prefix = `${accountId}:`;
+    let legacyChanged = false;
+    for (const k of Object.keys(legacyIndex)) {
+      if (k.startsWith(prefix)) {
+        delete legacyIndex[k];
+        legacyChanged = true;
+      }
+    }
+    if (legacyChanged) {
+      if (Object.keys(legacyIndex).length === 0) {
+        await chrome.storage.local.remove(LEGACY_EMBEDDING_KEY);
+      } else {
+        await chrome.storage.local.set({ [LEGACY_EMBEDDING_KEY]: legacyIndex });
+      }
+    }
+  }
+}
+
+// ─── ORPHAN PRUNING ─────────────────────────────────────────────────
 
 /**
  * Remove searchIndex and embeddingIndex entries whose storageId is not in the
  * provided set of valid storageIds (i.e. chats still tracked in sync storage).
- * Returns the number of entries pruned from each index.
  */
 export async function pruneOrphanedIndexEntries(
   validStorageIds: Set<string>,
@@ -106,102 +241,163 @@ export async function pruneOrphanedIndexEntries(
   let prunedText = 0;
   let prunedEmbeddings = 0;
 
-  // Prune text index
-  const textIndex = await getAllIndexedEntries();
-  const textKeys = Object.keys(textIndex);
-  const staleTextKeys = textKeys.filter((k) => !validStorageIds.has(k));
-  if (staleTextKeys.length > 0) {
-    for (const k of staleTextKeys) delete textIndex[k];
-    await new Promise<void>((resolve, reject) => {
-      chrome.storage.local.set({ [STORAGE_KEY]: textIndex }, () => {
-        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
-        resolve();
-      });
-    });
-    prunedText = staleTextKeys.length;
-  }
-
-  // Prune embedding index
-  const embIndex = await getAllEmbeddings();
-  const embKeys = Object.keys(embIndex);
-  const staleEmbKeys = embKeys.filter((k) => !validStorageIds.has(k));
-  if (staleEmbKeys.length > 0) {
-    for (const k of staleEmbKeys) delete embIndex[k];
-    await new Promise<void>((resolve, reject) => {
-      chrome.storage.local.set({ [EMBEDDING_KEY]: embIndex }, () => {
-        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
-        resolve();
-      });
-    });
-    prunedEmbeddings = staleEmbKeys.length;
-  }
-
-  return { prunedText, prunedEmbeddings };
-}
-(window as any).pruneOrphanedIndexEntries = pruneOrphanedIndexEntries;
-
-// ─── Phase B: Embedding Storage ──────────────────────────────────────
-
-/** Write (or overwrite) a single 768-dim embedding vector for the given storageId. */
-export async function putEmbedding(storageId: string, vector: number[]): Promise<void> {
-  const data = await chrome.storage.local.get(EMBEDDING_KEY);
-  const index = (data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === 'object' 
-    ? data[EMBEDDING_KEY] 
-    : {}) as Record<string, number[]>;
-  index[storageId] = vector;
   return new Promise((resolve, reject) => {
-    chrome.storage.local.set({ [EMBEDDING_KEY]: index }, () => {
+    chrome.storage.local.get(null, (items) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
-      resolve();
+
+      const updates: Record<string, any> = {};
+
+      // Text indexes
+      for (const [key, value] of Object.entries(items)) {
+        if ((key.startsWith(STORAGE_KEY_PREFIX) || key === LEGACY_STORAGE_KEY) && typeof value === 'object') {
+          const index = value as Record<string, ChatContentRecord>;
+          const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
+          if (staleKeys.length > 0) {
+            const newIndex = { ...index };
+            for (const k of staleKeys) delete newIndex[k];
+            updates[key] = newIndex;
+            prunedText += staleKeys.length;
+          }
+        }
+      }
+
+      // Embedding indexes
+      for (const [key, value] of Object.entries(items)) {
+        if ((key.startsWith(EMBEDDING_KEY_PREFIX) || key === LEGACY_EMBEDDING_KEY) && typeof value === 'object') {
+          const index = value as Record<string, number[]>;
+          const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
+          if (staleKeys.length > 0) {
+            const newIndex = { ...index };
+            for (const k of staleKeys) delete newIndex[k];
+            updates[key] = newIndex;
+            prunedEmbeddings += staleKeys.length;
+          }
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        chrome.storage.local.set(updates, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve({ prunedText, prunedEmbeddings });
+        });
+      } else {
+        resolve({ prunedText, prunedEmbeddings });
+      }
     });
   });
 }
 
-/** Load all stored embeddings. Only called when semantic search is active. */
-export async function getAllEmbeddings(): Promise<Record<string, number[]>> {
-  const data = await chrome.storage.local.get(EMBEDDING_KEY);
-  return data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === 'object'
-    ? (data[EMBEDDING_KEY] as Record<string, number[]>)
-    : {};
-}
+// ─── LEGACY MIGRATION ───────────────────────────────────────────────
 
 /**
- * Delete all embeddings for a given accountId.
- * Uses the storageId prefix ("accountId:chatId") so no cross-key lookup is needed.
+ * One-shot startup migration: moves entries from the flat legacy storage keys
+ * (`searchIndex`, `embeddingIndex`) into their per‑account equivalents
+ * (`searchIndex_<accountId>`, `embeddingIndex_<accountId>`), then deletes the
+ * legacy key when it is empty.
+ *
+ * Idempotent: safe to call even if legacy keys are already empty or already
+ * partially migrated. Per‑account data always wins on collision.
  */
-export async function deleteEmbeddingsForAccount(accountId: string): Promise<void> {
-  const data = await chrome.storage.local.get(EMBEDDING_KEY);
-  const all = (data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === 'object' 
-    ? data[EMBEDDING_KEY] 
-    : {}) as Record<string, number[]>;
-  const prefix = `${accountId}:`;
-  const filtered: Record<string, number[]> = {};
-  for (const [key, vec] of Object.entries(all)) {
-    if (!key.startsWith(prefix)) filtered[key] = vec;
-  }
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set({ [EMBEDDING_KEY]: filtered }, () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
+export async function migrateLegacyIndexToPerAccount(): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LEGACY_STORAGE_KEY, LEGACY_EMBEDDING_KEY], (items) => {
+      const updates: Record<string, any> = {};
+      const removals: string[] = [];
+
+      // ── Text index migration ──────────────────────────────────────
+      const legacyText = items[LEGACY_STORAGE_KEY];
+      if (legacyText && typeof legacyText === 'object') {
+        const byAccount: Record<string, Record<string, ChatContentRecord>> = {};
+        for (const [storageId, record] of Object.entries(legacyText as Record<string, ChatContentRecord>)) {
+          const acctId = (record as ChatContentRecord).accountId;
+          if (!acctId) continue;
+          if (!byAccount[acctId]) byAccount[acctId] = {};
+          byAccount[acctId][storageId] = record as ChatContentRecord;
+        }
+        for (const [acctId, entries] of Object.entries(byAccount)) {
+          const key = `${STORAGE_KEY_PREFIX}${acctId}`;
+          // Merge with existing per‑account data; existing entries win on collision
+          updates[key] = { ...entries, ...(updates[key] ?? {}) };
+        }
+        removals.push(LEGACY_STORAGE_KEY);
+      }
+
+      // ── Embedding index migration ─────────────────────────────────
+      const legacyEmbed = items[LEGACY_EMBEDDING_KEY];
+      if (legacyEmbed && typeof legacyEmbed === 'object') {
+        const byAccount: Record<string, Record<string, number[]>> = {};
+        for (const [storageId, vector] of Object.entries(legacyEmbed as Record<string, number[]>)) {
+          const acctId = storageId.split(':')[0];
+          if (!acctId) continue;
+          if (!byAccount[acctId]) byAccount[acctId] = {};
+          byAccount[acctId][storageId] = vector as number[];
+        }
+        for (const [acctId, entries] of Object.entries(byAccount)) {
+          const key = `${EMBEDDING_KEY_PREFIX}${acctId}`;
+          updates[key] = { ...entries, ...(updates[key] ?? {}) };
+        }
+        removals.push(LEGACY_EMBEDDING_KEY);
+      }
+
+      if (Object.keys(updates).length === 0 && removals.length === 0) {
+        resolve();
         return;
       }
-      resolve();
+
+      // Write per‑account keys first, then remove legacy keys
+      chrome.storage.local.set(updates, () => {
+        if (chrome.runtime.lastError) {
+          // Non-fatal: migration will retry on next startup
+          resolve();
+          return;
+        }
+        if (removals.length > 0) {
+          chrome.storage.local.remove(removals, () => resolve());
+        } else {
+          resolve();
+        }
+      });
     });
   });
 }
 
-// ─── Phase B: Semantic Settings Storage ──────────────────────────────
+// ─── EMBEDDING WRITE ────────────────────────────────────────────────
 
-/** Read the semantic search settings (null if never saved). */
+export async function putEmbedding(storageId: string, vector: number[]): Promise<void> {
+  const accountId = storageId.split(':')[0];
+  const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
+  
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(accountKey, (result) => {
+      const index: Record<string, number[]> =
+        (result[accountKey] && typeof result[accountKey] === 'object')
+          ? (result[accountKey] as Record<string, number[]>)
+          : {};
+      index[storageId] = vector;
+      chrome.storage.local.set({ [accountKey]: index }, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  });
+}
+
+// ─── SEMANTIC SETTINGS ──────────────────────────────────────────────
+
 export async function getSemanticSettings(): Promise<SemanticSettings | null> {
   const data = await chrome.storage.local.get(SEMANTIC_SETTINGS_KEY);
   return (data[SEMANTIC_SETTINGS_KEY] as SemanticSettings) ?? null;
 }
 
-/** Persist semantic search settings. Always to local, never sync. */
 export async function saveSemanticSettings(settings: SemanticSettings): Promise<void> {
   return new Promise((resolve, reject) => {
     chrome.storage.local.set({ [SEMANTIC_SETTINGS_KEY]: settings }, () => {
@@ -214,9 +410,17 @@ export async function saveSemanticSettings(settings: SemanticSettings): Promise<
   });
 }
 
-// Phase B window exposures
-(window as any).putEmbedding = putEmbedding;
+// ─── WINDOW EXPOSURES (keep existing) ───────────────────────────────
+(window as any).putChatContent = putChatContent;
+(window as any).getChatContent = getChatContent;
+(window as any).getAllChatContentForAccount = getAllChatContentForAccount;
+(window as any).getAllIndexedEntries = getAllIndexedEntries;
+(window as any).deleteChatContentForAccount = deleteChatContentForAccount;
 (window as any).getAllEmbeddings = getAllEmbeddings;
+(window as any).getAllEmbeddingsForAccount = getAllEmbeddingsForAccount;
+(window as any).putEmbedding = putEmbedding;
 (window as any).deleteEmbeddingsForAccount = deleteEmbeddingsForAccount;
+(window as any).pruneOrphanedIndexEntries = pruneOrphanedIndexEntries;
+(window as any).migrateLegacyIndexToPerAccount = migrateLegacyIndexToPerAccount;
 (window as any).getSemanticSettings = getSemanticSettings;
 (window as any).saveSemanticSettings = saveSemanticSettings;

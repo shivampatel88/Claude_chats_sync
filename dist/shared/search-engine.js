@@ -63,7 +63,7 @@
   window.searchContent = searchContent;
   const KEYWORD_WEIGHT = 0.3;
   const SEMANTIC_WEIGHT = 0.7;
-  const SEMANTIC_ONLY_THRESHOLD = 0.3;
+  const SEMANTIC_ONLY_THRESHOLD = 0.6;
   const MIN_COMBINED_SCORE = 0.05;
   function cosineSimilarity(vecA, vecB) {
     let dot = 0;

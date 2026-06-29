@@ -56,6 +56,8 @@
   const MIGRATION_DOUBLED_TITLES_V1 = "migration_doubledTitles_v1";
   // V2: re-run migration after deduplicate() was extended to title attr + span paths.
   const MIGRATION_DOUBLED_TITLES_V2 = "migration_doubledTitles_v2";
+  // V1: migrate flat legacy searchIndex / embeddingIndex keys to per-account keys.
+  const MIGRATION_LEGACY_SEARCH_V1 = "migration_legacySearch_v1";
 
   // API-based timestamp sync: fetch real conversation updatedAt from Claude's internal API.
   const API_SYNC_INTERVAL_MS = 60 * 1000; // at most once per 60 s
@@ -829,6 +831,7 @@
         STORAGE_KEYS.accounts,
         MIGRATION_DOUBLED_TITLES_V1,
         MIGRATION_DOUBLED_TITLES_V2,
+        MIGRATION_LEGACY_SEARCH_V1,
       ]);
 
       // Fetch orgId first — this is the single source of truth for account identity.
@@ -887,6 +890,12 @@
         await migrateDoubledTitles();
         await storageSet({ [MIGRATION_DOUBLED_TITLES_V2]: true });
         cctLog("✅ Migration V2 done");
+      }
+      if (!data[MIGRATION_LEGACY_SEARCH_V1] && window.migrateLegacyIndexToPerAccount) {
+        cctLog("🔧 Running legacy search index migration V1…");
+        await window.migrateLegacyIndexToPerAccount();
+        await storageSet({ [MIGRATION_LEGACY_SEARCH_V1]: true });
+        cctLog("✅ Legacy search index migration V1 done");
       }
     } catch (_error) {
       cctError("❌ Init failed:", _error);
