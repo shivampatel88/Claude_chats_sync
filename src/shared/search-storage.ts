@@ -95,6 +95,51 @@ export async function deleteChatContentForAccount(accountId: string): Promise<nu
 (window as any).deleteChatContentForAccount = deleteChatContentForAccount;
 (window as any).getAllEmbeddings = getAllEmbeddings;
 
+/**
+ * Remove searchIndex and embeddingIndex entries whose storageId is not in the
+ * provided set of valid storageIds (i.e. chats still tracked in sync storage).
+ * Returns the number of entries pruned from each index.
+ */
+export async function pruneOrphanedIndexEntries(
+  validStorageIds: Set<string>,
+): Promise<{ prunedText: number; prunedEmbeddings: number }> {
+  let prunedText = 0;
+  let prunedEmbeddings = 0;
+
+  // Prune text index
+  const textIndex = await getAllIndexedEntries();
+  const textKeys = Object.keys(textIndex);
+  const staleTextKeys = textKeys.filter((k) => !validStorageIds.has(k));
+  if (staleTextKeys.length > 0) {
+    for (const k of staleTextKeys) delete textIndex[k];
+    await new Promise<void>((resolve, reject) => {
+      chrome.storage.local.set({ [STORAGE_KEY]: textIndex }, () => {
+        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+        resolve();
+      });
+    });
+    prunedText = staleTextKeys.length;
+  }
+
+  // Prune embedding index
+  const embIndex = await getAllEmbeddings();
+  const embKeys = Object.keys(embIndex);
+  const staleEmbKeys = embKeys.filter((k) => !validStorageIds.has(k));
+  if (staleEmbKeys.length > 0) {
+    for (const k of staleEmbKeys) delete embIndex[k];
+    await new Promise<void>((resolve, reject) => {
+      chrome.storage.local.set({ [EMBEDDING_KEY]: embIndex }, () => {
+        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+        resolve();
+      });
+    });
+    prunedEmbeddings = staleEmbKeys.length;
+  }
+
+  return { prunedText, prunedEmbeddings };
+}
+(window as any).pruneOrphanedIndexEntries = pruneOrphanedIndexEntries;
+
 // ─── Phase B: Embedding Storage ──────────────────────────────────────
 
 /** Write (or overwrite) a single 768-dim embedding vector for the given storageId. */

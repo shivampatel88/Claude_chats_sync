@@ -65,6 +65,44 @@
   window.getAllIndexedEntries = getAllIndexedEntries;
   window.deleteChatContentForAccount = deleteChatContentForAccount;
   window.getAllEmbeddings = getAllEmbeddings;
+  async function pruneOrphanedIndexEntries(validStorageIds) {
+    let prunedText = 0;
+    let prunedEmbeddings = 0;
+    const textIndex = await getAllIndexedEntries();
+    const textKeys = Object.keys(textIndex);
+    const staleTextKeys = textKeys.filter((k) => !validStorageIds.has(k));
+    if (staleTextKeys.length > 0) {
+      for (const k of staleTextKeys) delete textIndex[k];
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [STORAGE_KEY]: textIndex }, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve();
+        });
+      });
+      prunedText = staleTextKeys.length;
+    }
+    const embIndex = await getAllEmbeddings();
+    const embKeys = Object.keys(embIndex);
+    const staleEmbKeys = embKeys.filter((k) => !validStorageIds.has(k));
+    if (staleEmbKeys.length > 0) {
+      for (const k of staleEmbKeys) delete embIndex[k];
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [EMBEDDING_KEY]: embIndex }, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve();
+        });
+      });
+      prunedEmbeddings = staleEmbKeys.length;
+    }
+    return { prunedText, prunedEmbeddings };
+  }
+  window.pruneOrphanedIndexEntries = pruneOrphanedIndexEntries;
   async function putEmbedding(storageId, vector) {
     const data = await chrome.storage.local.get(EMBEDDING_KEY);
     const index = data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};

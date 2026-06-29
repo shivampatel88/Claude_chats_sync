@@ -661,7 +661,20 @@ async function updateIndexStatusUI(account) {
     };
 
     if (!q || q.accountId !== account.accountId || q.status === "idle") {
-      statusLabel.textContent = "Search inside messages: Ready";
+      // Try to find the most recently indexed record for this account to show a real timestamp
+      let lastIndexedAt = 0;
+      if (window.getAllChatContentForAccount) {
+        const records = await window.getAllChatContentForAccount(account.accountId);
+        for (const rec of records) {
+          if ((rec.indexedAt || 0) > lastIndexedAt) lastIndexedAt = rec.indexedAt;
+        }
+      }
+
+      if (lastIndexedAt > 0) {
+        statusLabel.textContent = `Scanned ${formatChatDate(lastIndexedAt)}`;
+      } else {
+        statusLabel.textContent = "Search inside messages: Ready";
+      }
 
       const indexBtn = document.createElement("button");
       indexBtn.className = "index-btn has-tooltip";
@@ -1397,6 +1410,20 @@ async function reloadData() {
   // Phase A Search Engine: build index
   if (window.buildSearchIndex) {
     searchIndexHandle = await window.buildSearchIndex();
+  }
+
+  // Garbage-collect stale searchIndex/embeddingIndex entries whose chatId no
+  // longer exists in sync storage (deleted chats, removed accounts, etc.)
+  if (window.pruneOrphanedIndexEntries && Object.keys(state.chats).length > 0) {
+    const validIds = new Set(Object.keys(state.chats));
+    const { prunedText, prunedEmbeddings } = await window.pruneOrphanedIndexEntries(validIds);
+    if (prunedText > 0 || prunedEmbeddings > 0) {
+      console.log(`[CCT] Pruned ${prunedText} stale text entries, ${prunedEmbeddings} stale embeddings`);
+      // Rebuild the search index now that stale entries are gone
+      if (window.buildSearchIndex) {
+        searchIndexHandle = await window.buildSearchIndex();
+      }
+    }
   }
 
   state.searchMode = local.searchMode || "hybrid";
