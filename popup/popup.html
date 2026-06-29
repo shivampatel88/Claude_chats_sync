@@ -131,6 +131,17 @@
           <div class="account-meta-info">
             <span class="account-label">Active:</span>
             <span id="drawerAccountName" class="account-value">Account Name</span>
+            <div id="drawerAccountStats" class="account-stats" style="display: none;">
+              <div class="account-stats-item" title="Total Chats">
+                <i class="fa-regular fa-comments"></i><span id="statTotalChats">0</span>
+              </div>
+              <div class="account-stats-item" title="Scanned Chats">
+                <i class="fa-solid fa-search"></i><span id="statScannedChats">0</span>
+              </div>
+              <div class="account-stats-item" title="Embeddings">
+                <i class="fa-solid fa-network-wired"></i><span id="statEmbeddings">0</span>
+              </div>
+            </div>
           </div>
           <div id="accountIcons" class="account-icons">
             <button id="renameAccountBtn" class="acct-icon-btn" type="button" aria-label="Rename account" title="Rename account">

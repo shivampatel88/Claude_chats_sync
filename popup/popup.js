@@ -578,6 +578,31 @@ async function updateIndexStatusUI(account) {
     drawerAccountNameEl.textContent = shortAccountName(account);
   }
 
+  const drawerAccountStats = document.getElementById("drawerAccountStats");
+  const statTotalChats = document.getElementById("statTotalChats");
+  const statScannedChats = document.getElementById("statScannedChats");
+  const statEmbeddings = document.getElementById("statEmbeddings");
+  
+  if (drawerAccountStats && account) {
+    const totalChats = Object.values(state.chats || {}).filter(c => c.accountId === account.accountId).length;
+    if (statTotalChats) statTotalChats.textContent = totalChats;
+    drawerAccountStats.style.display = "flex";
+    
+    if (statScannedChats && window.getAllChatContentForAccount) {
+      window.getAllChatContentForAccount(account.accountId).then(records => {
+        statScannedChats.textContent = records.length;
+      }).catch(() => {});
+    }
+    
+    if (statEmbeddings && window.getAllEmbeddings) {
+      window.getAllEmbeddings().then(allEmbeddings => {
+        const prefix = account.accountId + ":";
+        const count = Object.keys(allEmbeddings || {}).filter(k => k.startsWith(prefix)).length;
+        statEmbeddings.textContent = count;
+      }).catch(() => {});
+    }
+  }
+
   let statusContainer = document.getElementById("indexStatusContainer");
   if (!statusContainer) return;
 
