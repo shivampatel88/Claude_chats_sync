@@ -11,7 +11,18 @@ export async function buildSearchIndex(): Promise<any> {
     idField: 'storageId',
   });
 
-  const records = Object.values(entries);
+  const records = Object.entries(entries)
+    .map(([storageId, record]) => {
+      if (record && typeof record === 'object') {
+        if (!record.storageId) {
+          return { ...record, storageId };
+        }
+        return record;
+      }
+      return null;
+    })
+    .filter((r): r is any => r !== null && typeof r === 'object' && r.storageId);
+
   if (records.length > 0) {
     index.addAll(records);
   }
@@ -21,12 +32,14 @@ export async function buildSearchIndex(): Promise<any> {
 
 // ─── 2. extractSnippet ───────────────────────────────────────────────
 
-export function extractSnippet(record: any, query: string): string {
+export function extractSnippet(record: any, query: string, queryWords?: string[]): string {
   const firstMessage: string = record.firstMessage ?? '';
   const lastMessage: string = record.lastMessage ?? '';
   const WINDOW = 150;
 
-  const words = query
+  // Accept pre-split tokens from the caller (avoids re-splitting per result);
+  // fall back to splitting here for single-call usage.
+  const words = queryWords ?? query
     .trim()
     .split(/\s+/)
     .filter((w) => w.length > 0)
@@ -101,7 +114,7 @@ const SEMANTIC_WEIGHT = 0.7;
  * Minimum cosine similarity threshold for semantic-only results (no keyword hit).
  * Prevents low-relevance chats from appearing purely because they have an embedding.
  */
-const SEMANTIC_ONLY_THRESHOLD = 0.3;
+const SEMANTIC_ONLY_THRESHOLD = 0.6;
 
 /** Minimum final combined score to include a result. Suppresses noise. */
 const MIN_COMBINED_SCORE = 0.05;
@@ -131,12 +144,16 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
  *   3. finalScore = normalizedKeyword * KEYWORD_WEIGHT + semanticScore * SEMANTIC_WEIGHT
  *
  * Graceful degradation: if queryEmbedding is null/undefined, returns keyword results unchanged.
+ *
+ * @param accountId  When provided, only embeddings for this account are loaded.
+ *   Prevents semantic results from one account from appearing when searching another.
  */
 export async function searchContentHybrid(
   index: any,
   query: string,
   queryEmbedding?: number[] | null,
   searchMode: 'text' | 'semantic' | 'hybrid' = 'hybrid',
+  accountId?: string,
 ): Promise<Array<{
   storageId: string;
   accountId: string;
@@ -144,6 +161,13 @@ export async function searchContentHybrid(
   snippet: string;
   score: number;
 }>> {
+  // Pre-split query tokens once; passed to extractSnippet to avoid N re-splits.
+  const queryWords = query
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.toLowerCase());
+
   // 1. Always run keyword search
   const keywordResults = searchContent(index, query);
 
@@ -160,18 +184,27 @@ export async function searchContentHybrid(
     normalizedKeywordMap.set(r.storageId, r.score / maxKeywordScore);
   }
 
-  // 4. Load all embeddings and compute cosine similarity for each
-  const embeddings = await (window as any).getAllEmbeddings() as Record<string, number[]>;
+  // 4. Load embeddings scoped to the active account (prevents cross-account contamination)
+  //    and compute cosine similarity for each.
+  const getEmbeds = accountId
+    ? (window as any).getAllEmbeddingsForAccount(accountId)
+    : (window as any).getAllEmbeddings();
+  const embeddings = await getEmbeds as Record<string, number[]>;
   const semanticScoreMap = new Map<string, number>();
   for (const [storageId, vec] of Object.entries(embeddings)) {
     semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
   }
 
+  // Hoist getAllIndexedEntries() here so it is called at most once per search,
+  // regardless of which mode branch executes below.
+  const entries = semanticScoreMap.size > 0
+    ? await (window as any).getAllIndexedEntries() as Record<string, any>
+    : {};
+
   // 4.5. Pure semantic search
   if (searchMode === 'semantic') {
     const merged = [];
     if (semanticScoreMap.size > 0) {
-      const entries = await (window as any).getAllIndexedEntries() as Record<string, any>;
       for (const [storageId, semScore] of semanticScoreMap.entries()) {
         if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
           const record = entries[storageId];
@@ -180,7 +213,7 @@ export async function searchContentHybrid(
             storageId,
             accountId: record.accountId,
             chatId: record.chatId,
-            snippet: extractSnippet(record, query),
+            snippet: extractSnippet(record, query, queryWords),
             score: semScore,
           });
         }
@@ -212,7 +245,6 @@ export async function searchContentHybrid(
 
   // 6. Add semantic-only results (no keyword match) that exceed the quality threshold
   if (semanticScoreMap.size > 0) {
-    const entries = await (window as any).getAllIndexedEntries() as Record<string, any>;
     for (const [storageId, semScore] of semanticScoreMap.entries()) {
       if (merged.has(storageId)) {
         // Update semantic score on existing keyword hit
@@ -225,7 +257,7 @@ export async function searchContentHybrid(
           storageId,
           accountId: record.accountId,
           chatId: record.chatId,
-          snippet: extractSnippet(record, query),
+          snippet: extractSnippet(record, query, queryWords),
           normalizedKeyword: 0,
           semanticScore: semScore,
         });
@@ -233,7 +265,9 @@ export async function searchContentHybrid(
     }
   }
 
-  // 7. Compute final scores, filter noise, sort descending
+  // 7. Compute final scores, filter noise, sort descending.
+  //    Strip the internal `hasKeyword` field — it is used only for the filter
+  //    predicate and must not appear in the public return type.
   return Array.from(merged.values())
     .map((r) => ({
       storageId: r.storageId,
@@ -244,7 +278,8 @@ export async function searchContentHybrid(
       hasKeyword: r.normalizedKeyword > 0,
     }))
     .filter((r) => r.hasKeyword || r.score >= MIN_COMBINED_SCORE)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score)
+    .map(({ hasKeyword: _drop, ...r }) => r);
 }
 
 (window as any).searchContentHybrid = searchContentHybrid;
