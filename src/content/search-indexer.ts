@@ -48,6 +48,7 @@ declare global {
     putEmbedding?: (storageId: string, vector: number[]) => Promise<void>;
     generateEmbedding?: (text: string, apiKey: string) => Promise<number[]>;
     getSemanticSettings?: () => Promise<{ enabled: boolean; apiKey: string } | null>;
+    getAllEmbeddings?: () => Promise<Record<string, number[]>>;
   }
 }
 
@@ -276,15 +277,21 @@ export class IndexingQueue {
           // This avoids calling fetchRecentChats() on every chat fetch cycle.
           const serverUpdatedAt = state.updatedAtMap[chatId] ?? 0;
 
-          await window.putChatContent!({
-            storageId,
-            accountId: state.accountId,
-            chatId,
-            firstMessage: content.firstMessage,
-            lastMessage: content.lastMessage,
-            indexedAt: Date.now(),
-            serverUpdatedAt,
-          });
+          const { putChatContent, generateEmbedding, putEmbedding } = window;
+
+          if (putChatContent) {
+            await putChatContent({
+              storageId,
+              accountId: state.accountId,
+              chatId,
+              firstMessage: content.firstMessage,
+              lastMessage: content.lastMessage,
+              indexedAt: Date.now(),
+              serverUpdatedAt,
+            });
+          } else {
+            cctWarn('putChatContent not available on window');
+          }
           state.doneChatIds.push(chatId);
 
           // ── Phase B: generate and store embedding ──────────────────
@@ -292,15 +299,15 @@ export class IndexingQueue {
             this.semanticEnabled &&
             this.semanticApiKey &&
             !this.embeddingError &&
-            window.generateEmbedding &&
-            window.putEmbedding
+            generateEmbedding &&
+            putEmbedding
           ) {
             try {
               // Concatenate first + last message, capped at 2000 chars total
               const embedText = (content.firstMessage + ' ' + content.lastMessage).slice(0, 2000);
               cctLog(`Generating embedding for ${chatId}...`);
-              const vector = await window.generateEmbedding(embedText, this.semanticApiKey);
-              await window.putEmbedding(storageId, vector);
+              const vector = await generateEmbedding(embedText, this.semanticApiKey);
+              await putEmbedding(storageId, vector);
               cctLog(`Embedding stored for ${chatId}`);
             } catch (embErr: unknown) {
               const msg = embErr instanceof Error ? embErr.message : String(embErr);
@@ -401,8 +408,8 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
   }
 
   // Load existing embeddings so we can detect chats already indexed but missing embeddings
-  const existingEmbeddings: Record<string, number[]> = window.getAllEmbeddings
-    ? await (window.getAllEmbeddings as () => Promise<Record<string, number[]>>)()
+  const existingEmbeddings = window.getAllEmbeddings
+    ? await window.getAllEmbeddings()
     : {};
 
   // Build the updatedAt map once here — passed into the queue so processNext()

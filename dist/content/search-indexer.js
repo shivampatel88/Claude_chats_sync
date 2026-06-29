@@ -161,22 +161,27 @@
           const content = await fetchChatContent(state.orgId, chatId);
           if (content) {
             const serverUpdatedAt = state.updatedAtMap[chatId] ?? 0;
-            await window.putChatContent({
-              storageId,
-              accountId: state.accountId,
-              chatId,
-              firstMessage: content.firstMessage,
-              lastMessage: content.lastMessage,
-              indexedAt: Date.now(),
-              serverUpdatedAt
-            });
+            const { putChatContent, generateEmbedding, putEmbedding } = window;
+            if (putChatContent) {
+              await putChatContent({
+                storageId,
+                accountId: state.accountId,
+                chatId,
+                firstMessage: content.firstMessage,
+                lastMessage: content.lastMessage,
+                indexedAt: Date.now(),
+                serverUpdatedAt
+              });
+            } else {
+              cctWarn("putChatContent not available on window");
+            }
             state.doneChatIds.push(chatId);
-            if (this.semanticEnabled && this.semanticApiKey && !this.embeddingError && window.generateEmbedding && window.putEmbedding) {
+            if (this.semanticEnabled && this.semanticApiKey && !this.embeddingError && generateEmbedding && putEmbedding) {
               try {
                 const embedText = (content.firstMessage + " " + content.lastMessage).slice(0, 2e3);
                 cctLog(`Generating embedding for ${chatId}...`);
-                const vector = await window.generateEmbedding(embedText, this.semanticApiKey);
-                await window.putEmbedding(storageId, vector);
+                const vector = await generateEmbedding(embedText, this.semanticApiKey);
+                await putEmbedding(storageId, vector);
                 cctLog(`Embedding stored for ${chatId}`);
               } catch (embErr) {
                 const msg = embErr instanceof Error ? embErr.message : String(embErr);
