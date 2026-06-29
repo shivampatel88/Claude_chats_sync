@@ -3,9 +3,15 @@
   const GEMINI_EMBED_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
   const OUTPUT_DIMENSIONS = 768;
   async function generateEmbedding(text, apiKey) {
-    const res = await fetch(`${GEMINI_EMBED_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+    if (text.length > 2e3) {
+      throw new Error(`Input too long: ${text.length} chars (max 2000)`);
+    }
+    const res = await fetch(GEMINI_EMBED_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
       body: JSON.stringify({
         model: "models/gemini-embedding-001",
         content: { parts: [{ text }] },

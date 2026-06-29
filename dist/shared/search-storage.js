@@ -1,30 +1,77 @@
 "use strict";
 (() => {
-  const STORAGE_KEY = "searchIndex";
-  const EMBEDDING_KEY = "embeddingIndex";
+  const STORAGE_KEY_PREFIX = "searchIndex_";
+  const EMBEDDING_KEY_PREFIX = "embeddingIndex_";
+  const LEGACY_STORAGE_KEY = "searchIndex";
+  const LEGACY_EMBEDDING_KEY = "embeddingIndex";
   const SEMANTIC_SETTINGS_KEY = "semanticSettings";
   async function getAllIndexedEntries() {
     return new Promise((resolve) => {
-      chrome.storage.local.get(STORAGE_KEY, (result) => {
+      chrome.storage.local.get(null, (items) => {
         if (chrome.runtime.lastError) {
           resolve({});
           return;
         }
-        const index = result[STORAGE_KEY];
-        resolve(index && typeof index === "object" ? index : {});
+        const all = {};
+        if (items[LEGACY_STORAGE_KEY] && typeof items[LEGACY_STORAGE_KEY] === "object") {
+          Object.assign(all, items[LEGACY_STORAGE_KEY]);
+        }
+        for (const [key, value] of Object.entries(items)) {
+          if (key.startsWith(STORAGE_KEY_PREFIX) && typeof value === "object") {
+            Object.assign(all, value);
+          }
+        }
+        resolve(all);
+      });
+    });
+  }
+  async function getAllEmbeddings() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(null, (items) => {
+        const all = {};
+        if (items[LEGACY_EMBEDDING_KEY] && typeof items[LEGACY_EMBEDDING_KEY] === "object") {
+          Object.assign(all, items[LEGACY_EMBEDDING_KEY]);
+        }
+        for (const [key, value] of Object.entries(items)) {
+          if (key.startsWith(EMBEDDING_KEY_PREFIX) && typeof value === "object") {
+            Object.assign(all, value);
+          }
+        }
+        resolve(all);
+      });
+    });
+  }
+  async function getAllEmbeddingsForAccount(accountId) {
+    const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
+    return new Promise((resolve) => {
+      chrome.storage.local.get([accountKey, LEGACY_EMBEDDING_KEY], (items) => {
+        const all = {};
+        if (items[LEGACY_EMBEDDING_KEY] && typeof items[LEGACY_EMBEDDING_KEY] === "object") {
+          const prefix = `${accountId}:`;
+          for (const [k, v] of Object.entries(items[LEGACY_EMBEDDING_KEY])) {
+            if (k.startsWith(prefix)) all[k] = v;
+          }
+        }
+        if (items[accountKey] && typeof items[accountKey] === "object") {
+          Object.assign(all, items[accountKey]);
+        }
+        resolve(all);
       });
     });
   }
   async function putChatContent(record) {
-    const index = await getAllIndexedEntries();
-    index[record.storageId] = record;
+    const accountKey = `${STORAGE_KEY_PREFIX}${record.accountId}`;
     return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [STORAGE_KEY]: index }, () => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve();
+      chrome.storage.local.get(accountKey, (result) => {
+        const index = result[accountKey] && typeof result[accountKey] === "object" ? result[accountKey] : {};
+        index[record.storageId] = record;
+        chrome.storage.local.set({ [accountKey]: index }, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve();
+        });
       });
     });
   }
@@ -37,105 +84,194 @@
     }
   }
   async function getAllChatContentForAccount(accountId) {
-    const index = await getAllIndexedEntries();
-    return Object.values(index).filter((record) => record.accountId === accountId);
-  }
-  async function deleteChatContentForAccount(accountId) {
-    const index = await getAllIndexedEntries();
-    const keysToDelete = Object.keys(index).filter((key) => index[key].accountId === accountId);
-    for (const key of keysToDelete) {
-      delete index[key];
-    }
-    if (keysToDelete.length > 0) {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set({ [STORAGE_KEY]: index }, () => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          resolve();
-        });
-      });
-    }
-    return keysToDelete.length;
-  }
-  window.putChatContent = putChatContent;
-  window.getChatContent = getChatContent;
-  window.getAllChatContentForAccount = getAllChatContentForAccount;
-  window.getAllIndexedEntries = getAllIndexedEntries;
-  window.deleteChatContentForAccount = deleteChatContentForAccount;
-  window.getAllEmbeddings = getAllEmbeddings;
-  async function pruneOrphanedIndexEntries(validStorageIds) {
-    let prunedText = 0;
-    let prunedEmbeddings = 0;
-    const textIndex = await getAllIndexedEntries();
-    const textKeys = Object.keys(textIndex);
-    const staleTextKeys = textKeys.filter((k) => !validStorageIds.has(k));
-    if (staleTextKeys.length > 0) {
-      for (const k of staleTextKeys) delete textIndex[k];
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set({ [STORAGE_KEY]: textIndex }, () => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          resolve();
-        });
-      });
-      prunedText = staleTextKeys.length;
-    }
-    const embIndex = await getAllEmbeddings();
-    const embKeys = Object.keys(embIndex);
-    const staleEmbKeys = embKeys.filter((k) => !validStorageIds.has(k));
-    if (staleEmbKeys.length > 0) {
-      for (const k of staleEmbKeys) delete embIndex[k];
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set({ [EMBEDDING_KEY]: embIndex }, () => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          resolve();
-        });
-      });
-      prunedEmbeddings = staleEmbKeys.length;
-    }
-    return { prunedText, prunedEmbeddings };
-  }
-  window.pruneOrphanedIndexEntries = pruneOrphanedIndexEntries;
-  async function putEmbedding(storageId, vector) {
-    const data = await chrome.storage.local.get(EMBEDDING_KEY);
-    const index = data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};
-    index[storageId] = vector;
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [EMBEDDING_KEY]: index }, () => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve();
+    const accountKey = `${STORAGE_KEY_PREFIX}${accountId}`;
+    return new Promise((resolve) => {
+      chrome.storage.local.get([accountKey, LEGACY_STORAGE_KEY], (result) => {
+        const index = result[accountKey] && typeof result[accountKey] === "object" ? result[accountKey] : {};
+        const legacyIndex = result[LEGACY_STORAGE_KEY] && typeof result[LEGACY_STORAGE_KEY] === "object" ? result[LEGACY_STORAGE_KEY] : {};
+        const combined = { ...legacyIndex, ...index };
+        const records = Object.values(combined);
+        resolve(records.filter((record) => record.accountId === accountId));
       });
     });
   }
-  async function getAllEmbeddings() {
-    const data = await chrome.storage.local.get(EMBEDDING_KEY);
-    return data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};
+  async function deleteChatContentForAccount(accountId) {
+    const records = await getAllChatContentForAccount(accountId);
+    let totalDeleted = records.length;
+    const accountKey = `${STORAGE_KEY_PREFIX}${accountId}`;
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.remove(accountKey, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+    const legacy = await new Promise((resolve) => {
+      chrome.storage.local.get(LEGACY_STORAGE_KEY, (res) => resolve(res));
+    });
+    const legacyIndex = legacy[LEGACY_STORAGE_KEY];
+    if (legacyIndex && typeof legacyIndex === "object") {
+      let legacyChanged = false;
+      for (const k of Object.keys(legacyIndex)) {
+        if (legacyIndex[k] && legacyIndex[k].accountId === accountId) {
+          delete legacyIndex[k];
+          legacyChanged = true;
+        }
+      }
+      if (legacyChanged) {
+        if (Object.keys(legacyIndex).length === 0) {
+          await chrome.storage.local.remove(LEGACY_STORAGE_KEY);
+        } else {
+          await chrome.storage.local.set({ [LEGACY_STORAGE_KEY]: legacyIndex });
+        }
+      }
+    }
+    return totalDeleted;
   }
   async function deleteEmbeddingsForAccount(accountId) {
-    const data = await chrome.storage.local.get(EMBEDDING_KEY);
-    const all = data[EMBEDDING_KEY] && typeof data[EMBEDDING_KEY] === "object" ? data[EMBEDDING_KEY] : {};
-    const prefix = `${accountId}:`;
-    const filtered = {};
-    for (const [key, vec] of Object.entries(all)) {
-      if (!key.startsWith(prefix)) filtered[key] = vec;
+    const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.remove(accountKey, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+    const legacy = await new Promise((resolve) => {
+      chrome.storage.local.get(LEGACY_EMBEDDING_KEY, (res) => resolve(res));
+    });
+    const legacyIndex = legacy[LEGACY_EMBEDDING_KEY];
+    if (legacyIndex && typeof legacyIndex === "object") {
+      const prefix = `${accountId}:`;
+      let legacyChanged = false;
+      for (const k of Object.keys(legacyIndex)) {
+        if (k.startsWith(prefix)) {
+          delete legacyIndex[k];
+          legacyChanged = true;
+        }
+      }
+      if (legacyChanged) {
+        if (Object.keys(legacyIndex).length === 0) {
+          await chrome.storage.local.remove(LEGACY_EMBEDDING_KEY);
+        } else {
+          await chrome.storage.local.set({ [LEGACY_EMBEDDING_KEY]: legacyIndex });
+        }
+      }
     }
+  }
+  async function pruneOrphanedIndexEntries(validStorageIds) {
+    let prunedText = 0;
+    let prunedEmbeddings = 0;
     return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [EMBEDDING_KEY]: filtered }, () => {
+      chrome.storage.local.get(null, (items) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-        resolve();
+        const updates = {};
+        for (const [key, value] of Object.entries(items)) {
+          if ((key.startsWith(STORAGE_KEY_PREFIX) || key === LEGACY_STORAGE_KEY) && typeof value === "object") {
+            const index = value;
+            const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
+            if (staleKeys.length > 0) {
+              const newIndex = { ...index };
+              for (const k of staleKeys) delete newIndex[k];
+              updates[key] = newIndex;
+              prunedText += staleKeys.length;
+            }
+          }
+        }
+        for (const [key, value] of Object.entries(items)) {
+          if ((key.startsWith(EMBEDDING_KEY_PREFIX) || key === LEGACY_EMBEDDING_KEY) && typeof value === "object") {
+            const index = value;
+            const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
+            if (staleKeys.length > 0) {
+              const newIndex = { ...index };
+              for (const k of staleKeys) delete newIndex[k];
+              updates[key] = newIndex;
+              prunedEmbeddings += staleKeys.length;
+            }
+          }
+        }
+        if (Object.keys(updates).length > 0) {
+          chrome.storage.local.set(updates, () => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            resolve({ prunedText, prunedEmbeddings });
+          });
+        } else {
+          resolve({ prunedText, prunedEmbeddings });
+        }
+      });
+    });
+  }
+  async function migrateLegacyIndexToPerAccount() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([LEGACY_STORAGE_KEY, LEGACY_EMBEDDING_KEY], (items) => {
+        const updates = {};
+        const removals = [];
+        const legacyText = items[LEGACY_STORAGE_KEY];
+        if (legacyText && typeof legacyText === "object") {
+          const byAccount = {};
+          for (const [storageId, record] of Object.entries(legacyText)) {
+            const acctId = record.accountId;
+            if (!acctId) continue;
+            if (!byAccount[acctId]) byAccount[acctId] = {};
+            byAccount[acctId][storageId] = record;
+          }
+          for (const [acctId, entries] of Object.entries(byAccount)) {
+            const key = `${STORAGE_KEY_PREFIX}${acctId}`;
+            updates[key] = { ...entries, ...updates[key] ?? {} };
+          }
+          removals.push(LEGACY_STORAGE_KEY);
+        }
+        const legacyEmbed = items[LEGACY_EMBEDDING_KEY];
+        if (legacyEmbed && typeof legacyEmbed === "object") {
+          const byAccount = {};
+          for (const [storageId, vector] of Object.entries(legacyEmbed)) {
+            const acctId = storageId.split(":")[0];
+            if (!acctId) continue;
+            if (!byAccount[acctId]) byAccount[acctId] = {};
+            byAccount[acctId][storageId] = vector;
+          }
+          for (const [acctId, entries] of Object.entries(byAccount)) {
+            const key = `${EMBEDDING_KEY_PREFIX}${acctId}`;
+            updates[key] = { ...entries, ...updates[key] ?? {} };
+          }
+          removals.push(LEGACY_EMBEDDING_KEY);
+        }
+        if (Object.keys(updates).length === 0 && removals.length === 0) {
+          resolve();
+          return;
+        }
+        chrome.storage.local.set(updates, () => {
+          if (chrome.runtime.lastError) {
+            resolve();
+            return;
+          }
+          if (removals.length > 0) {
+            chrome.storage.local.remove(removals, () => resolve());
+          } else {
+            resolve();
+          }
+        });
+      });
+    });
+  }
+  async function putEmbedding(storageId, vector) {
+    const accountId = storageId.split(":")[0];
+    const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(accountKey, (result) => {
+        const index = result[accountKey] && typeof result[accountKey] === "object" ? result[accountKey] : {};
+        index[storageId] = vector;
+        chrome.storage.local.set({ [accountKey]: index }, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve();
+        });
       });
     });
   }
@@ -154,9 +290,17 @@
       });
     });
   }
-  window.putEmbedding = putEmbedding;
+  window.putChatContent = putChatContent;
+  window.getChatContent = getChatContent;
+  window.getAllChatContentForAccount = getAllChatContentForAccount;
+  window.getAllIndexedEntries = getAllIndexedEntries;
+  window.deleteChatContentForAccount = deleteChatContentForAccount;
   window.getAllEmbeddings = getAllEmbeddings;
+  window.getAllEmbeddingsForAccount = getAllEmbeddingsForAccount;
+  window.putEmbedding = putEmbedding;
   window.deleteEmbeddingsForAccount = deleteEmbeddingsForAccount;
+  window.pruneOrphanedIndexEntries = pruneOrphanedIndexEntries;
+  window.migrateLegacyIndexToPerAccount = migrateLegacyIndexToPerAccount;
   window.getSemanticSettings = getSemanticSettings;
   window.saveSemanticSettings = saveSemanticSettings;
 })();

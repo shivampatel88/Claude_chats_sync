@@ -153,6 +153,15 @@
           cctLog(`Queue complete!`);
           state.status = "complete";
           await this.saveState(state);
+          if (this.semanticEnabled && window.getSemanticSettings && window.saveSemanticSettings) {
+            try {
+              const settings = await window.getSemanticSettings();
+              if (settings) {
+                await window.saveSemanticSettings({ ...settings, lastEmbeddedAt: Date.now() });
+              }
+            } catch (_) {
+            }
+          }
           return;
         }
         const chatId = state.pendingChatIds.shift();
@@ -244,6 +253,12 @@
         return;
       }
     }
+    const expectedAccountId = `acc_org_${orgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+    if (accountId !== expectedAccountId) {
+      cctWarn(`Account mismatch: requested ${accountId} but active tab is ${expectedAccountId}`);
+      alert("Account mismatch:\nYou are currently logged in to a different account on this Claude tab. Please switch to this account in Claude before scanning.");
+      return;
+    }
     if (!internalBridge.fetchRecentChats) {
       cctWarn(`fetchRecentChats not available on bridge`);
       return;
@@ -270,7 +285,8 @@
       const existing = indexedMap.get(chat.chatId);
       const storageId = `${accountId}:${chat.chatId}`;
       const needsEmbedding = apiKey && !existingEmbeddings[storageId];
-      if (existing && existing.serverUpdatedAt === serverTime && !needsEmbedding) {
+      const isUpToDate = existing && existing.serverUpdatedAt > 0 && existing.serverUpdatedAt === serverTime;
+      if (isUpToDate && !needsEmbedding) {
         continue;
       }
       chatIdsToProcess.push(chat.chatId);
@@ -301,4 +317,14 @@
   window.__cctInternal = window.__cctInternal ?? {};
   window.__cctInternal.queue = queue;
   window.__cctInternal.indexAccount = indexAccount;
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      queue.loadState().then((state) => {
+        if (state && state.status === "paused-tab-hidden") {
+          cctLog("Tab became visible, resuming queue...");
+          queue.resume();
+        }
+      });
+    }
+  });
 })();

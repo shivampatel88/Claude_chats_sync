@@ -1451,3 +1451,8 @@ input {
 .index-status .index-btn.has-tooltip:focus-within::before {
   transform: translateX(50%) translateY(0);
 }
+
+.rate-limit-warning {
+  color: #D9784A;
+  font-weight: 500;
+}

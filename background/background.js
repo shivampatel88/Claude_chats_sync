@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("/shared/shared.js");
+importScripts("../shared/shared.js");
 
 // IMP-01: Background service worker that owns all chrome.storage.sync writes.
 // This prevents the content script and popup from racing on chunk writes when both
