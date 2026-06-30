@@ -111,6 +111,29 @@
         </div>
       </div>
 
+      <!-- API Key configuration (Option A, dynamically shown if no default key is built-in) -->
+      <div id="apiKeyConfigSection" class="drawer-search-mode-section" style="border-top: 1px solid var(--line); display: none;">
+        <div class="drawer-section-title">Gemini API Key</div>
+        
+        <!-- Collapsed active state to save space -->
+        <div id="apiKeyActiveRow" style="display: none; align-items: center; justify-content: space-between; font-size: 12px;">
+          <span>Gemini API: <strong style="color: var(--green);">Active ⚡</strong></span>
+          <button id="editApiKeyBtn" class="acct-icon-btn" type="button" style="height: 24px; padding: 0 8px;">Edit</button>
+        </div>
+        
+        <!-- Expanded input form -->
+        <div id="apiKeyInputForm" style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; gap: 8px;">
+            <input type="password" id="apiKeyInput" placeholder="Enter Gemini API key..." class="semantic-key-input">
+            <button id="saveApiKeyBtn" class="acct-icon-btn" type="button" style="height: 28px;">Save</button>
+          </div>
+          <div style="font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; align-items: center;">
+            <a href="https://aistudio.google.com/" target="_blank" style="color: var(--blue); text-decoration: none;">Get a free API Key</a>
+            <span id="apiKeyValidationStatus" style="font-weight: 500;"></span>
+          </div>
+        </div>
+      </div>
+
 
 
       <!-- Global Settings Section (shown when activeAccountId is "all") -->

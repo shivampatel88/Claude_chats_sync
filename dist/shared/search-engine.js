@@ -5,7 +5,11 @@
     const index = new MiniSearch({
       fields: ["firstMessage", "lastMessage"],
       storeFields: ["storageId", "accountId", "chatId", "firstMessage", "lastMessage"],
-      idField: "storageId"
+      idField: "storageId",
+      // Tokenize on whitespace and common separators; minimum token length 2
+      // to avoid single-char noise tokens ('a', 'i', etc.) polluting the index.
+      tokenize: (text) => text.toLowerCase().split(/[\s\-_/\\.,;:!?()\[\]{}'"]+/).filter((t) => t.length >= 2),
+      processTerm: (term) => term.toLowerCase()
     });
     const records = Object.entries(entries).map(([storageId, record]) => {
       if (record && typeof record === "object") {
@@ -42,15 +46,23 @@
     if (firstMessage.length <= WINDOW) return firstMessage;
     return firstMessage.slice(0, WINDOW) + "\u2026";
   }
+  function getMiniSearchOptions(query) {
+    const terms = query.trim().split(/\s+/).filter(Boolean);
+    const minTermLen = terms.reduce((min, t) => Math.min(min, t.length), Infinity);
+    return {
+      prefix: minTermLen >= 4,
+      fuzzy: minTermLen >= 6 ? 0.15 : false,
+      boost: { firstMessage: 2 },
+      // combineWith: AND ensures ALL query terms must appear (no partial-query hits)
+      combineWith: "AND"
+    };
+  }
   function searchContent(index, query) {
     if (index === null || index === void 0 || !query.trim()) {
       return [];
     }
-    const results = index.search(query, {
-      prefix: true,
-      fuzzy: 0.2,
-      boost: { firstMessage: 2 }
-    });
+    const opts = getMiniSearchOptions(query);
+    const results = index.search(query, opts);
     return results.map((result) => ({
       storageId: result.storageId,
       accountId: result.accountId,
@@ -61,10 +73,11 @@
   }
   window.buildSearchIndex = buildSearchIndex;
   window.searchContent = searchContent;
-  const KEYWORD_WEIGHT = 0.3;
-  const SEMANTIC_WEIGHT = 0.7;
-  const SEMANTIC_ONLY_THRESHOLD = 0.6;
-  const MIN_COMBINED_SCORE = 0.05;
+  const KEYWORD_WEIGHT = 0.4;
+  const SEMANTIC_WEIGHT = 0.6;
+  const SEMANTIC_ONLY_THRESHOLD = 0.65;
+  const MIN_COMBINED_SCORE = 0.15;
+  const MIN_KEYWORD_SCORE_FRACTION = 0.1;
   function cosineSimilarity(vecA, vecB) {
     let dot = 0;
     let normA = 0;
@@ -149,8 +162,9 @@
       chatId: r.chatId,
       snippet: r.snippet,
       score: r.normalizedKeyword * KEYWORD_WEIGHT + r.semanticScore * SEMANTIC_WEIGHT,
-      hasKeyword: r.normalizedKeyword > 0
-    })).filter((r) => r.hasKeyword || r.score >= MIN_COMBINED_SCORE).sort((a, b) => b.score - a.score).map(({ hasKeyword: _drop, ...r }) => r);
+      // isStrongKeyword: keyword score must be at least 10% of the top keyword score
+      isStrongKeyword: r.normalizedKeyword >= MIN_KEYWORD_SCORE_FRACTION
+    })).filter((r) => r.score >= MIN_COMBINED_SCORE).sort((a, b) => b.score - a.score).map(({ isStrongKeyword: _drop, ...r }) => r);
   }
   window.searchContentHybrid = searchContentHybrid;
 })();

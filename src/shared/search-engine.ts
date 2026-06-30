@@ -9,6 +9,14 @@ export async function buildSearchIndex(): Promise<any> {
     fields: ['firstMessage', 'lastMessage'],
     storeFields: ['storageId', 'accountId', 'chatId', 'firstMessage', 'lastMessage'],
     idField: 'storageId',
+    // Tokenize on whitespace and common separators; minimum token length 2
+    // to avoid single-char noise tokens ('a', 'i', etc.) polluting the index.
+    tokenize: (text: string) =>
+      text
+        .toLowerCase()
+        .split(/[\s\-_/\\.,;:!?()\[\]{}'"]+/)
+        .filter((t) => t.length >= 2),
+    processTerm: (term: string) => term.toLowerCase(),
   });
 
   const records = Object.entries(entries)
@@ -68,6 +76,32 @@ export function extractSnippet(record: any, query: string, queryWords?: string[]
 
 // ─── 3. searchContent ───────────────────────────────────────────────
 
+/**
+ * Derives safe MiniSearch search options based on query characteristics.
+ *
+ * Rules:
+ *  - prefix:  only enabled when the query term is ≥ 4 characters.  A 3-char
+ *             term like "aws" would incorrectly match "awesome", "award", etc.
+ *  - fuzzy:   only enabled when the term is ≥ 6 characters, capped at 0.15
+ *             (≈ 1 edit on a 7-char word).  Short-term fuzzy causes massive
+ *             false-positive fan-out.
+ *  - boost:   firstMessage is 2× more important than lastMessage because it
+ *             captures the user's original intent.
+ */
+function getMiniSearchOptions(query: string): Record<string, any> {
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  // Use the shortest term to decide — if any term is short, be conservative.
+  const minTermLen = terms.reduce((min, t) => Math.min(min, t.length), Infinity);
+
+  return {
+    prefix: minTermLen >= 4,
+    fuzzy: minTermLen >= 6 ? 0.15 : false,
+    boost: { firstMessage: 2 },
+    // combineWith: AND ensures ALL query terms must appear (no partial-query hits)
+    combineWith: 'AND',
+  };
+}
+
 export function searchContent(
   index: any,
   query: string,
@@ -82,11 +116,8 @@ export function searchContent(
     return [];
   }
 
-  const results = index.search(query, {
-    prefix: true,
-    fuzzy: 0.2,
-    boost: { firstMessage: 2 },
-  });
+  const opts = getMiniSearchOptions(query);
+  const results = index.search(query, opts);
 
   return results.map((result: any) => ({
     storageId: result.storageId as string,
@@ -105,19 +136,30 @@ export function searchContent(
 // ─── Phase B: Hybrid Search ──────────────────────────────────────────
 
 /** Fraction of the final score contributed by keyword (BM25) results. */
-const KEYWORD_WEIGHT = 0.3;
+const KEYWORD_WEIGHT = 0.4;
 
 /** Fraction of the final score contributed by semantic (cosine) results. */
-const SEMANTIC_WEIGHT = 0.7;
+const SEMANTIC_WEIGHT = 0.6;
 
 /**
- * Minimum cosine similarity threshold for semantic-only results (no keyword hit).
- * Prevents low-relevance chats from appearing purely because they have an embedding.
+ * Minimum cosine similarity threshold for a semantic-only result (no keyword hit).
+ * 0.65 means the embedding must be noticeably close in meaning — avoids noise.
  */
-const SEMANTIC_ONLY_THRESHOLD = 0.6;
+const SEMANTIC_ONLY_THRESHOLD = 0.65;
 
-/** Minimum final combined score to include a result. Suppresses noise. */
-const MIN_COMBINED_SCORE = 0.05;
+/**
+ * Minimum final combined score to include ANY result in the list.
+ * Raised from 0.05 → 0.15 to cut low-quality noise aggressively.
+ */
+const MIN_COMBINED_SCORE = 0.15;
+
+/**
+ * A keyword hit must reach at least this fraction of the top keyword score
+ * to be counted as a genuine keyword match.  Prevents very weak BM25 matches
+ * (e.g. a single occurrence deep in a 2000-char blob) from being treated as
+ * keyword matches and bypassing the combined-score filter.
+ */
+const MIN_KEYWORD_SCORE_FRACTION = 0.1;
 
 /**
  * Cosine similarity between two vectors.
@@ -266,8 +308,16 @@ export async function searchContentHybrid(
   }
 
   // 7. Compute final scores, filter noise, sort descending.
-  //    Strip the internal `hasKeyword` field — it is used only for the filter
-  //    predicate and must not appear in the public return type.
+  //
+  //    A result is kept when ANY of these conditions hold:
+  //      (a) It has a strong keyword match (normalizedKeyword ≥ MIN_KEYWORD_SCORE_FRACTION)
+  //          AND a combined score ≥ MIN_COMBINED_SCORE.
+  //      (b) It is a semantic-only result whose combined score ≥ MIN_COMBINED_SCORE.
+  //          (semantic-only entries already passed SEMANTIC_ONLY_THRESHOLD above)
+  //
+  //    The old code used `r.hasKeyword` (normalizedKeyword > 0) as a free pass,
+  //    which meant even a near-zero BM25 hit — e.g. "aws" fuzzy-matching "awesome" —
+  //    would always appear in results.  That is the root cause of the noise.
   return Array.from(merged.values())
     .map((r) => ({
       storageId: r.storageId,
@@ -275,11 +325,12 @@ export async function searchContentHybrid(
       chatId: r.chatId,
       snippet: r.snippet,
       score: (r.normalizedKeyword * KEYWORD_WEIGHT) + (r.semanticScore * SEMANTIC_WEIGHT),
-      hasKeyword: r.normalizedKeyword > 0,
+      // isStrongKeyword: keyword score must be at least 10% of the top keyword score
+      isStrongKeyword: r.normalizedKeyword >= MIN_KEYWORD_SCORE_FRACTION,
     }))
-    .filter((r) => r.hasKeyword || r.score >= MIN_COMBINED_SCORE)
+    .filter((r) => r.score >= MIN_COMBINED_SCORE)
     .sort((a, b) => b.score - a.score)
-    .map(({ hasKeyword: _drop, ...r }) => r);
+    .map(({ isStrongKeyword: _drop, ...r }) => r);
 }
 
 (window as any).searchContentHybrid = searchContentHybrid;

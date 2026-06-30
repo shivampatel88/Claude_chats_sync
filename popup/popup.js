@@ -1194,6 +1194,12 @@ function renderChats() {
     if (state.searchMode !== "text" && isSemanticPossible) {
       const activeAccountAtTrigger = state.activeAccountId;
       const searchModeAtTrigger = state.searchMode;
+      // Snapshot the pure title-only matches NOW (before keyword baseline mutates allChats).
+      // The async callback must not rely on the allChats reference because the
+      // keyword baseline path below pushes content results into it, which would
+      // cause the hybrid callback to include those content hits in titleMatchIds
+      // and skip adding proper snippets/scores to them from the semantic results.
+      const titleOnlyChats = [...allChats];
 
       // Run semantic or hybrid search asynchronously
       window
@@ -1211,40 +1217,54 @@ function renderChats() {
           if (state.query.trim() !== queryRaw || state.activeAccountId !== activeAccountAtTrigger || state.searchMode !== searchModeAtTrigger) return;
           const finalChats = [];
           if (state.searchMode === "semantic") {
-            // Pure semantic: only show semantic matches
+            // Pure semantic: only show semantic matches, sorted by score
             for (const res of results) {
               const chatObj = state.chats[res.storageId];
-              if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet });
+              if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
             }
+            // Sort by semantic relevance score descending
+            finalChats.sort((a, b) => (b._score || 0) - (a._score || 0));
           } else {
-            // Hybrid: start with keyword matches and merge semantic results
-            const titleMatchIds = new Set(allChats.map((c) => c.storageId));
-            finalChats.push(...allChats);
+            // Hybrid: merge title matches with scored semantic+keyword results.
+            // Use the frozen titleOnlyChats snapshot (NOT the mutated allChats) so
+            // that content keyword hits from the baseline render don't bleed into
+            // the titleMatchIds set and suppress proper hybrid scoring.
+            const titleMatchIds = new Set(titleOnlyChats.map((c) => c.storageId));
+            // Build a score-lookup for hybrid results so we can sort by relevance
+            const scoreMap = new Map(results.map((r) => [r.storageId, { score: r.score, snippet: r.snippet }]));
+
+            // Start from title matches, inject hybrid snippet+score where available
+            for (const chat of titleOnlyChats) {
+              const hybridData = scoreMap.get(chat.storageId);
+              finalChats.push(hybridData
+                ? { ...chat, _snippet: hybridData.snippet, _score: hybridData.score }
+                : { ...chat, _score: 0 }
+              );
+            }
+            // Add content-only matches (not in title list) from hybrid results
             for (const res of results) {
               if (!titleMatchIds.has(res.storageId)) {
                 const chatObj = state.chats[res.storageId];
-                if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet });
-              } else {
-                const idx = finalChats.findIndex((c) => c.storageId === res.storageId);
-                if (idx !== -1) finalChats[idx] = { ...finalChats[idx], _snippet: res.snippet };
+                if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
               }
             }
+            // Sort by hybrid relevance score descending (most relevant first)
+            finalChats.sort((a, b) => (b._score || 0) - (a._score || 0));
           }
-          finalChats.sort(compareChats);
           _renderChatListItems(list, summary, finalChats);
         })
         .catch((err) => {
           console.warn("Semantic search failed:", err);
           const isRateLimit = String(err).includes('RATE_LIMITED') || String(err).includes('429');
-          summary.textContent = isRateLimit 
-            ? "Semantic search paused (Rate Limited). Showing keyword results." 
+          summary.textContent = isRateLimit
+            ? "Semantic search paused (Rate Limited). Showing keyword results."
             : "Semantic search failed. Showing keyword results.";
           summary.classList.add("rate-limit-warning");
         });
     }
 
     if (state.searchMode !== "semantic") {
-      // Keyword baseline (run synchronously)
+      // Keyword baseline (run synchronously, sorted by BM25 score)
       const contentResults = window.searchContent(searchIndexHandle, queryRaw);
       const titleMatchIds = new Set(allChats.map((c) => c.storageId));
 
@@ -1252,16 +1272,20 @@ function renderChats() {
         if (!titleMatchIds.has(res.storageId)) {
           const chatObj = state.chats[res.storageId];
           if (chatObj) {
-            const cloned = { ...chatObj, _snippet: res.snippet };
+            // _score is used for relevance sorting in the initial keyword render
+            const cloned = { ...chatObj, _snippet: res.snippet, _score: res.score };
             allChats.push(cloned);
           }
         } else {
           const idx = allChats.findIndex((c) => c.storageId === res.storageId);
           if (idx !== -1) {
-            allChats[idx] = { ...allChats[idx], _snippet: res.snippet };
+            allChats[idx] = { ...allChats[idx], _snippet: res.snippet, _score: res.score };
           }
         }
       }
+      // Sort the merged list by relevance score so highest-scoring results appear first.
+      // Title-matched entries that had no content score get _score=undefined, treated as 0.
+      allChats.sort((a, b) => (b._score || 0) - (a._score || 0));
     } else {
        list.replaceChildren();
        const loading = document.createElement("div");
@@ -1997,6 +2021,34 @@ function bindEvents() {
       badge.style.display = isEnabled ? "" : "none";
       badge.textContent = searchMode === "semantic" ? "⚡ Semantic" : "⚡ Hybrid";
     }
+
+    // ── Option A API Key Config Section display ──
+    const apiSection = document.getElementById("apiKeyConfigSection");
+    if (apiSection) {
+      // If a default/personal key is compiled into the bundle, hide the entry box entirely
+      if (window.DEFAULT_EMBEDDING_KEY) {
+        apiSection.style.display = "none";
+      } else {
+        apiSection.style.display = "flex";
+        const activeRow = document.getElementById("apiKeyActiveRow");
+        const inputForm = document.getElementById("apiKeyInputForm");
+        const apiKeyInput = document.getElementById("apiKeyInput");
+        const status = document.getElementById("apiKeyValidationStatus");
+
+        if (status) status.textContent = "";
+
+        const savedKey = state.semanticSettings && state.semanticSettings.apiKey;
+        if (savedKey) {
+          if (activeRow) activeRow.style.display = "flex";
+          if (inputForm) inputForm.style.display = "none";
+          if (apiKeyInput) apiKeyInput.value = savedKey;
+        } else {
+          if (activeRow) activeRow.style.display = "none";
+          if (inputForm) inputForm.style.display = "flex";
+          if (apiKeyInput) apiKeyInput.value = "";
+        }
+      }
+    }
   }
 
   // Bind search mode radio changes
@@ -2022,7 +2074,7 @@ function bindEvents() {
         badge.textContent = mode === "semantic" ? "⚡ Semantic" : "⚡ Hybrid";
       }
 
-      // Trigger scanning if we just enabled it and have an active account (only on user interaction)
+      // Trigger scanning if we just enabled it and have an active account
       if (e.isTrusted && enabled && apiKey) {
         const account = selectedAccountForActions() ||
           (state.currentAccountId ? state.accounts[state.currentAccountId] : null);
@@ -2033,6 +2085,83 @@ function bindEvents() {
       renderChats();
     });
   });
+
+  // Bind Gemini API key Save button (Option A)
+  const saveApiKeyBtn = document.getElementById("saveApiKeyBtn");
+  if (saveApiKeyBtn) {
+    saveApiKeyBtn.addEventListener("click", async () => {
+      const apiKeyInput = document.getElementById("apiKeyInput");
+      const status = document.getElementById("apiKeyValidationStatus");
+      const activeRow = document.getElementById("apiKeyActiveRow");
+      const inputForm = document.getElementById("apiKeyInputForm");
+
+      if (!apiKeyInput) return;
+      const enteredKey = apiKeyInput.value.trim();
+
+      if (!enteredKey) {
+        if (status) {
+          status.textContent = "Please enter a key";
+          status.style.color = "var(--danger)";
+        }
+        return;
+      }
+
+      if (status) {
+        status.textContent = "Validating...";
+        status.style.color = "var(--muted)";
+      }
+
+      if (window.generateEmbedding) {
+        try {
+          // Validate the key via a dummy request to Gemini
+          await window.generateEmbedding("test", enteredKey);
+
+          const searchMode = state.searchMode || "hybrid";
+          const enabled = (searchMode !== "text");
+          state.semanticSettings = { enabled, apiKey: enteredKey };
+          await storageSet({ semanticSettings: state.semanticSettings });
+
+          if (status) {
+            status.textContent = "✓ Active";
+            status.style.color = "var(--green)";
+          }
+
+          // Collapse input box into a single low-profile status row to save space
+          setTimeout(() => {
+            if (activeRow) activeRow.style.display = "flex";
+            if (inputForm) inputForm.style.display = "none";
+          }, 800);
+
+          // Auto-trigger scanning if search mode is active
+          if (enabled) {
+            const account = selectedAccountForActions() ||
+              (state.currentAccountId ? state.accounts[state.currentAccountId] : null);
+            if (account) triggerIndexing(account);
+          }
+        } catch (err) {
+          console.warn("Gemini API key validation failed:", err);
+          if (status) {
+            status.textContent = "✗ Invalid key";
+            status.style.color = "var(--danger)";
+          }
+        }
+      }
+    });
+  }
+
+  // Bind Gemini API key Edit button (Option A)
+  const editApiKeyBtn = document.getElementById("editApiKeyBtn");
+  if (editApiKeyBtn) {
+    editApiKeyBtn.addEventListener("click", () => {
+      const activeRow = document.getElementById("apiKeyActiveRow");
+      const inputForm = document.getElementById("apiKeyInputForm");
+      const status = document.getElementById("apiKeyValidationStatus");
+
+      if (activeRow) activeRow.style.display = "none";
+      if (inputForm) inputForm.style.display = "flex";
+      if (status) status.textContent = "";
+    });
+  }
 
 }
 
