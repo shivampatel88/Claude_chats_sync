@@ -150,13 +150,35 @@ export class IndexingQueue {
   private semanticApiKey: string | null = null;
   private embeddingError: 'invalid-key' | 'rate-limited' | null = null;
 
+  private hasStorage(): boolean {
+    try {
+      return (
+        typeof chrome !== 'undefined' &&
+        chrome.runtime &&
+        !!chrome.runtime.id &&
+        chrome.storage &&
+        !!chrome.storage.local
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   async loadState(): Promise<QueueState | null> {
-    const data = await chrome.storage.local.get([this.key]);
-    return (data[this.key] as QueueState) ?? null;
+    if (!this.hasStorage()) return null;
+    try {
+      const data = await chrome.storage.local.get([this.key]);
+      return (data[this.key] as QueueState) ?? null;
+    } catch (_) {
+      return null;
+    }
   }
 
   async saveState(state: QueueState): Promise<void> {
-    await chrome.storage.local.set({ [this.key]: state });
+    if (!this.hasStorage()) return;
+    try {
+      await chrome.storage.local.set({ [this.key]: state });
+    } catch (_) {}
   }
 
   async start(
@@ -498,6 +520,9 @@ document.addEventListener('visibilitychange', () => {
         cctLog('Tab became visible, resuming queue...');
         queue.resume();
       }
+    }).catch(() => {
+      // Extension context may have been invalidated (extension reloaded while tab was open).
+      // Silently ignore — the orphaned listener has nothing valid to do anyway.
     });
   }
 });

@@ -58,6 +58,4 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
 (window as any).generateEmbedding = generateEmbedding;
 
 declare const process: any;
-(window as any).DEFAULT_EMBEDDING_KEY = typeof process !== 'undefined' && process.env && process.env.EMBEDDING_KEY 
-  ? process.env.EMBEDDING_KEY 
-  : '';
+(window as any).DEFAULT_EMBEDDING_KEY = process.env.EMBEDDING_KEY || '';

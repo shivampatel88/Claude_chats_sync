@@ -31,5 +31,5 @@
     return data.embedding.values;
   }
   window.generateEmbedding = generateEmbedding;
-  window.DEFAULT_EMBEDDING_KEY = typeof process !== "undefined" && process.env && "REMOVED" ? "REMOVED" : "";
+  window.DEFAULT_EMBEDDING_KEY = "REMOVED";
 })();

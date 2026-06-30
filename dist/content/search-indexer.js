@@ -66,12 +66,28 @@
       this.semanticApiKey = null;
       this.embeddingError = null;
     }
+    hasStorage() {
+      try {
+        return typeof chrome !== "undefined" && chrome.runtime && !!chrome.runtime.id && chrome.storage && !!chrome.storage.local;
+      } catch (_) {
+        return false;
+      }
+    }
     async loadState() {
-      const data = await chrome.storage.local.get([this.key]);
-      return data[this.key] ?? null;
+      if (!this.hasStorage()) return null;
+      try {
+        const data = await chrome.storage.local.get([this.key]);
+        return data[this.key] ?? null;
+      } catch (_) {
+        return null;
+      }
     }
     async saveState(state) {
-      await chrome.storage.local.set({ [this.key]: state });
+      if (!this.hasStorage()) return;
+      try {
+        await chrome.storage.local.set({ [this.key]: state });
+      } catch (_) {
+      }
     }
     async start(accountId, orgId, chatIds, updatedAtMap = {}, apiKey) {
       cctLog(`Starting queue for account ${accountId} with ${chatIds.length} chats`);
@@ -324,6 +340,7 @@
           cctLog("Tab became visible, resuming queue...");
           queue.resume();
         }
+      }).catch(() => {
       });
     }
   });
