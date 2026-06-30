@@ -12,7 +12,7 @@
 //
 // API (exposed on window.cctDiag):
 //   push(category, data)  — record one event (non-blocking)
-//   export()              — flush + return full log as an array
+//   export()              — flush + return full log as an array (dev mode only)
 //   clear()               — wipe buffer and storage
 //
 // Load order: must be loaded BEFORE shared.js and content-script.js.
@@ -60,6 +60,7 @@
       // Non-fatal — silently discard if storage is unavailable.
     }
   }
+
 
   async function _export() {
     await _flush();

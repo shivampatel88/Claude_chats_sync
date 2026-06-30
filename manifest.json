@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Claude Chat Tracker",
-  "version": "0.5.8",
+  "name": "Claude Chat Sync",
+  "version": "0.5.9",
   "description": "Track and sync visible Claude.ai chats across your Chrome profiles.",
   "permissions": ["storage", "unlimitedStorage", "cookies", "declarativeNetRequest", "tabs"],
   "host_permissions": [
@@ -17,7 +17,7 @@
   "content_scripts": [
     {
       "matches": ["https://claude.ai/*"],
-      "js": ["shared/diag-logger.js", "shared/shared.js", "dist/shared/search-storage.js", "dist/shared/embedding-api.js", "dist/content/search-indexer.js", "content/content-script.js"],
+      "js": ["shared/dev-mode.js", "shared/diag-logger.js", "shared/shared.js", "dist/shared/search-storage.js", "dist/shared/embedding-api.js", "dist/content/search-indexer.js", "content/content-script.js"],
       "run_at": "document_idle"
     },
     {

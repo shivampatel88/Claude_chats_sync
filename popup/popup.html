@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <h1>Claude Chats</h1>
+      <h1>Claude Chats <span id="devModeBadge" style="display:none; font-size:11px; font-weight:600; color:#C9A227; letter-spacing:0.5px; vertical-align:middle;">[DEV]</span></h1>
       <p class="status-line">
         <span id="statsText">Loading...</span>
         <span class="status-sep">·</span>
@@ -39,7 +39,7 @@
           <i class="fa-solid fa-bug"></i>
         </button>
         <button id="startClearBtn" class="icon-button danger-button" type="button" aria-label="Clear tracked data" title="Clear tracked data">
-          <i class="fa-solid fa-ban" style="color: rgb(181, 24, 24);"></i>
+          <i class="fa-solid fa-broom" style="color: rgb(141, 31, 51);"></i>
         </button>
       </div>
     </div>
@@ -209,6 +209,7 @@
     <section id="chatList" class="chat-list" aria-live="polite"></section>
   </main>
 
+  <script src="../shared/dev-mode.js"></script>
   <script src="../shared/diag-logger.js"></script>
   <script src="../shared/shared.js"></script>
   <div id="clearConfirmModal" class="modal-overlay" style="display: none;">

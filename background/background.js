@@ -94,9 +94,28 @@ let syncInProgress = false;
 const syncQueue = [];
 
 // Structured logging for the background service worker (visible in chrome://extensions → service worker)
+// bgLog/bgWarn are silenced when developer mode is OFF (devMode key not set in chrome.storage.local).
+// Toggle dev mode by clicking the popup title 5 times.
 const BGT = "[CCT-BG]";
-const bgLog = (...a) => console.log(BGT, ...a);
-const bgWarn = (...a) => console.warn(BGT, ...a);
+let bgLog  = (...a) => console.log(BGT, ...a);
+let bgWarn = (...a) => console.warn(BGT, ...a);
+
+// Read devMode from storage once on startup; silence logging if not set.
+(async () => {
+  try {
+    const result = await chrome.storage.local.get(["devMode"]);
+    if (!result.devMode) {
+      const noop = () => {};
+      bgLog  = noop;
+      bgWarn = noop;
+    }
+  } catch (_) {
+    // Storage unavailable — default to silent.
+    const noop = () => {};
+    bgLog  = noop;
+    bgWarn = noop;
+  }
+})();
 
 // ─── declarativeNetRequest: login_hint injection ──────────────────────────────
 // When the user switches accounts, we register a dynamic DNR rule that appends

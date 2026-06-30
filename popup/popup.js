@@ -587,20 +587,23 @@ async function updateIndexStatusUI(account) {
   if (drawerAccountStats && account) {
     const totalChats = Object.values(state.chats || {}).filter(c => c.accountId === account.accountId).length;
     if (statTotalChats) statTotalChats.textContent = totalChats;
-    drawerAccountStats.style.display = "flex";
+    // Only show the stats panel in developer mode (not visible to regular users).
+    drawerAccountStats.style.display = window.CCT_DEV_MODE ? "flex" : "none";
     
-    if (statScannedChats && window.getAllChatContentForAccount) {
-      window.getAllChatContentForAccount(account.accountId).then(records => {
-        statScannedChats.textContent = records.length;
-      }).catch(() => {});
-    }
-    
-    if (statEmbeddings && window.getAllEmbeddings) {
-      window.getAllEmbeddings().then(allEmbeddings => {
-        const prefix = account.accountId + ":";
-        const count = Object.keys(allEmbeddings || {}).filter(k => k.startsWith(prefix)).length;
-        statEmbeddings.textContent = count;
-      }).catch(() => {});
+    if (window.CCT_DEV_MODE) {
+      if (statScannedChats && window.getAllChatContentForAccount) {
+        window.getAllChatContentForAccount(account.accountId).then(records => {
+          statScannedChats.textContent = records.length;
+        }).catch(() => {});
+      }
+      
+      if (statEmbeddings && window.getAllEmbeddings) {
+        window.getAllEmbeddings().then(allEmbeddings => {
+          const prefix = account.accountId + ":";
+          const count = Object.keys(allEmbeddings || {}).filter(k => k.startsWith(prefix)).length;
+          statEmbeddings.textContent = count;
+        }).catch(() => {});
+      }
     }
   }
 
@@ -1607,7 +1610,91 @@ async function createAccount() {
   });
 }
 
+// ─── Developer Mode ──────────────────────────────────────────────────────────
+// Applies all dev-mode UI effects after cctDevModeReady has resolved.
+// Safe to call multiple times; each call re-reads window.CCT_DEV_MODE.
+function applyDevMode() {
+  const isDev = !!window.CCT_DEV_MODE;
+
+  // ── [DEV] badge in header ──
+  const badge = document.getElementById("devModeBadge");
+  if (badge) badge.style.display = isDev ? "" : "none";
+
+  // ── Popup width: 20% wider in dev mode (416 → ~499px) ──
+  document.body.style.width = isDev ? "499px" : "";
+
+  // ── Export diagnostic log button ──
+  const exportDiagBtn = document.getElementById("exportDiagBtn");
+  if (exportDiagBtn) {
+    if (isDev && window.cctDiag) {
+      // Reveal the button if the diag buffer has any entries.
+      window.cctDiag.export().then((log) => {
+        if (log && log.length > 0) exportDiagBtn.style.display = "";
+      }).catch(() => {});
+
+      // Bind the download handler (clone node first to remove any previous listener).
+      const fresh = exportDiagBtn.cloneNode(true);
+      exportDiagBtn.replaceWith(fresh);
+      fresh.addEventListener("click", async () => {
+        try {
+          const log = await window.cctDiag.export();
+          let logString = JSON.stringify(log, null, 2);
+          logString = logString.replace(/AIza[a-zA-Z0-9_-]{35}/g, "[REDACTED_API_KEY]");
+          const blob = new Blob([logString], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `cct-diag-${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          alert("Failed to export diagnostic log: " + (err && err.message ? err.message : String(err)));
+        }
+      });
+    } else {
+      exportDiagBtn.style.display = "none";
+    }
+  }
+}
+
 function bindEvents() {
+  // ── Dev Mode: secret 5-tap gesture on the title ─────────────────────────
+  // Click the "Claude Chats" h1 five times to toggle developer mode.
+  // Invisible and meaningless to regular users.
+  let _devTapCount = 0;
+  let _devTapTimer = null;
+  const titleEl = document.querySelector(".brand h1");
+  if (titleEl) {
+    titleEl.addEventListener("click", () => {
+      _devTapCount++;
+      clearTimeout(_devTapTimer);
+      _devTapTimer = setTimeout(() => { _devTapCount = 0; }, 1500);
+      if (_devTapCount >= 5) {
+        _devTapCount = 0;
+        clearTimeout(_devTapTimer);
+        if (window.cctDevToggle) {
+          window.cctDevToggle().then((next) => {
+            window.CCT_DEV_MODE = next;
+            applyDevMode();
+            const msg = next ? "🛠 Developer Mode ENABLED" : "✅ Developer Mode DISABLED";
+            // Use a brief visual toast rather than alert() to avoid blocking.
+            const toast = document.createElement("div");
+            toast.textContent = msg;
+            toast.style.cssText = [
+              "position:fixed", "bottom:12px", "left:50%", "transform:translateX(-50%)",
+              "background:rgba(30,31,33,0.95)", "color:#f6f2ea", "padding:8px 16px",
+              "border-radius:8px", "font-size:12px", "font-weight:600",
+              "border:1px solid rgba(255,255,255,0.15)", "z-index:9999",
+              "pointer-events:none", "box-shadow:0 4px 20px rgba(0,0,0,0.5)"
+            ].join(";");
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+          });
+        }
+      }
+    });
+  }
+
   let searchDebounceTimeout = null;
   document.getElementById("searchInput").addEventListener("input", (event) => {
     state.query = event.target.value;
@@ -1895,44 +1982,6 @@ function bindEvents() {
     });
   }
 
-  // Export diagnostic log — downloads cct-diag-<ts>.json with all recorded
-  // identity decisions and chatId collision events.  Button is hidden by default
-  // and revealed only when the diag buffer contains at least one entry, keeping
-  // the UI uncluttered for normal sessions.
-  const exportDiagBtn = document.getElementById("exportDiagBtn");
-  if (exportDiagBtn && window.cctDiag) {
-    // Reveal button if there are existing entries in storage.
-    window.cctDiag
-      .export()
-      .then((log) => {
-        if (log && log.length > 0) {
-          exportDiagBtn.style.display = "";
-        }
-      })
-      .catch(() => {});
-
-    exportDiagBtn.addEventListener("click", async () => {
-      try {
-        const log = await window.cctDiag.export();
-        let logString = JSON.stringify(log, null, 2);
-        logString = logString.replace(/AIza[a-zA-Z0-9_-]{35}/g, "[REDACTED_API_KEY]");
-        const blob = new Blob([logString], {
-          type: "application/json",
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `cct-diag-${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (err) {
-        alert(
-          "Failed to export diagnostic log: " +
-            (err && err.message ? err.message : String(err)),
-        );
-      }
-    });
-  }
 
   if (confirmClearBtn && clearConfirmModal) {
     confirmClearBtn.addEventListener("click", async (e) => {
@@ -2167,6 +2216,12 @@ function bindEvents() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
+  // Wait for dev mode to be read from storage before rendering,
+  // so CCT_DEV_MODE is accurate when applyDevMode() and render() run.
+  if (window.cctDevModeReady) {
+    await window.cctDevModeReady;
+  }
+  applyDevMode();
   if (window.migrateLegacyData) {
     try {
       await window.migrateLegacyData();
