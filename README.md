@@ -172,31 +172,47 @@ The tradeoff: Replacing global `console` methods affects the entire context, inc
 
 ## Quick Start
 
-**Prerequisites:** Chrome 120+, Node.js 18+, a [Google AI Studio](https://aistudio.google.com) API key (for semantic search — optional).
+### Option A: Load Pre-Built Release (No Setup Needed)
+Since pre-compiled build artifacts are tracked and committed inside the `dist/` directory, you can run the extension immediately without setting up Node.js or compiling code:
 
-```bash
-# 1. Clone and install
-git clone https://github.com/yourhandle/claude-chat-sync.git
-cd claude-chat-sync
-npm install
+1. **Download the source repository**: Click the green **Code** button and select **Download ZIP** (or clone the repository using Git). Extract the ZIP archive.
+2. **Load into Chrome**: 
+   - Open Chrome and navigate to `chrome://extensions/`.
+   - Enable **Developer mode** using the toggle switch in the top-right corner.
+   - Click the **Load unpacked** button in the top-left corner.
+   - Select the extracted project root directory.
+3. **Launch**: Open a [Claude.ai](https://claude.ai) tab. Click the extension icon in your Chrome toolbar to open the search dashboard.
+4. **Configure Semantic Search (Optional)**: Open the search settings panel inside the popup, paste your Google Gemini API key, and enable Semantic Search.
 
-# 2. Set your Gemini API key (skip if not using semantic search)
-echo "EMBEDDING_KEY=your_key_here" > .env
+---
 
-# 3. Build the TypeScript modules
-npm run build
-# Outputs to dist/: search-storage.js, search-engine.js, embedding-api.js, search-indexer.js
+### Option B: Build from Source (For Custom Key Embedding)
+If you prefer to modify the codebase or embed a default Gemini API key directly into the compiled package:
 
-# 4. Load into Chrome
-# chrome://extensions → Enable Developer Mode → Load unpacked → select this directory
+**Prerequisites**: Chrome 120+, Node.js 18+
 
-# 5. Open Claude.ai — sidebar scraping starts automatically at document_idle.
-#    Click the extension icon to open the chat dashboard.
-```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/yourhandle/claude-chat-sync.git
+   cd claude-chat-sync
+   npm install
+   ```
+2. **Embed a default API key** (Optional):
+   ```bash
+   echo "EMBEDDING_KEY=your_gemini_api_key_here" > .env
+   ```
+3. **Build the TypeScript modules**:
+   ```bash
+   npm run build
+   ```
+   This compiles the TypeScript files under `src/` to browser-compatible scripts in the `dist/` directory.
+4. **Load into Chrome**: Open `chrome://extensions/`, enable **Developer mode**, click **Load unpacked**, and select this project directory.
 
-> If the popup shows no chats after loading, wait a few seconds and refresh the Claude tab. The scraper fires after `document_idle`, which can lag behind Claude's React hydration on slower connections.
+---
 
-To enable semantic search: popup → Settings → paste Gemini API key → toggle Semantic Search on. The indexing queue begins fetching conversation content in the background at one request per 2.5 seconds.
+> **Note**: If the popup shows no chats immediately after loading, refresh your active Claude.ai tab. The sidebar scraper runs after the page load reaches `document_idle`, which may occur slightly after React hydration on slower networks.
+
+To enable semantic search with background indexing, open the settings drawer in the popup, input your API key, and toggle the mode. The background indexer runs at a 2.5-second interval to stay within rate limits.
 
 ---
 
