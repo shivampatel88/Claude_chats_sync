@@ -806,7 +806,7 @@ async function triggerIndexing(account, isAuto = false) {
   // In pure text mode, skip embedding entirely.
   const wantsEmbedding = state.searchMode !== "text";
   const embeddingApiKey = wantsEmbedding
-    ? ((state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY || null)
+    ? ((state.semanticSettings && state.semanticSettings.apiKey) || null)
     : null;
 
   chrome.tabs
@@ -1185,7 +1185,7 @@ function renderChats() {
   const queryRaw = state.query.trim();
   let isSemanticPossible = false;
   if (queryRaw && searchIndexHandle && window.searchContent) {
-    const apiKey = (state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY;
+    const apiKey = state.semanticSettings && state.semanticSettings.apiKey;
     isSemanticPossible = !!(
       state.semanticSettings &&
       state.semanticSettings.enabled &&
@@ -1512,14 +1512,6 @@ async function reloadData() {
   // Phase B: load semantic settings so search and badge UI are current
   if (window.getSemanticSettings) {
     state.semanticSettings = await window.getSemanticSettings();
-    if (!state.semanticSettings && window.DEFAULT_EMBEDDING_KEY) {
-      // Auto-initialize if it hasn't been saved yet
-      state.semanticSettings = { enabled: true, apiKey: window.DEFAULT_EMBEDDING_KEY };
-      if (window.saveSemanticSettings) window.saveSemanticSettings(state.semanticSettings);
-    } else if (state.semanticSettings && !state.semanticSettings.apiKey && window.DEFAULT_EMBEDDING_KEY) {
-      // Backfill the default key if they cleared it
-      state.semanticSettings.apiKey = window.DEFAULT_EMBEDDING_KEY;
-    }
   }
 
   maybeResumeQueue();
@@ -2071,31 +2063,28 @@ function bindEvents() {
       badge.textContent = searchMode === "semantic" ? "⚡ Semantic" : "⚡ Hybrid";
     }
 
-    // ── Option A API Key Config Section display ──
+    // ── API Key Config Section display ──
+    // Key lives exclusively in chrome.storage.local — no compiled default.
+    // Show collapsed status row if a key is already saved, otherwise show input form.
     const apiSection = document.getElementById("apiKeyConfigSection");
     if (apiSection) {
-      // If a default/personal key is compiled into the bundle, hide the entry box entirely
-      if (window.DEFAULT_EMBEDDING_KEY) {
-        apiSection.style.display = "none";
+      apiSection.style.display = "flex";
+      const activeRow = document.getElementById("apiKeyActiveRow");
+      const inputForm = document.getElementById("apiKeyInputForm");
+      const apiKeyInput = document.getElementById("apiKeyInput");
+      const status = document.getElementById("apiKeyValidationStatus");
+
+      if (status) status.textContent = "";
+
+      const savedKey = state.semanticSettings && state.semanticSettings.apiKey;
+      if (savedKey) {
+        if (activeRow) activeRow.style.display = "flex";
+        if (inputForm) inputForm.style.display = "none";
+        if (apiKeyInput) apiKeyInput.value = savedKey;
       } else {
-        apiSection.style.display = "flex";
-        const activeRow = document.getElementById("apiKeyActiveRow");
-        const inputForm = document.getElementById("apiKeyInputForm");
-        const apiKeyInput = document.getElementById("apiKeyInput");
-        const status = document.getElementById("apiKeyValidationStatus");
-
-        if (status) status.textContent = "";
-
-        const savedKey = state.semanticSettings && state.semanticSettings.apiKey;
-        if (savedKey) {
-          if (activeRow) activeRow.style.display = "flex";
-          if (inputForm) inputForm.style.display = "none";
-          if (apiKeyInput) apiKeyInput.value = savedKey;
-        } else {
-          if (activeRow) activeRow.style.display = "none";
-          if (inputForm) inputForm.style.display = "flex";
-          if (apiKeyInput) apiKeyInput.value = "";
-        }
+        if (activeRow) activeRow.style.display = "none";
+        if (inputForm) inputForm.style.display = "flex";
+        if (apiKeyInput) apiKeyInput.value = "";
       }
     }
   }
@@ -2108,7 +2097,7 @@ function bindEvents() {
       state.searchMode = mode;
 
       const enabled = (mode !== "text");
-      const apiKey = (state.semanticSettings && state.semanticSettings.apiKey) || window.DEFAULT_EMBEDDING_KEY;
+      const apiKey = state.semanticSettings && state.semanticSettings.apiKey;
       state.semanticSettings = { ...state.semanticSettings, enabled, apiKey };
 
       await storageSet({

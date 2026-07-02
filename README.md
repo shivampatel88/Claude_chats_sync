@@ -156,27 +156,28 @@ The tradeoff: Replacing global `console` methods affects the entire context, inc
 
 ## Tech Stack
 
-| Technology | Role in this project | Why not X |
-|---|---|---|
-| Chrome Extension APIs (MV3) | Content injection, cookie management, `declarativeNetRequest`, storage, service worker | MV2 — deprecated; Chrome is actively blocking MV2 extensions from the Web Store |
-| `chrome.storage.sync` | Cross-profile chat sync (accounts + recent chats, compacted to single-char keys to fit the 8192-byte per-key limit) | Firebase / custom backend — requires auth infrastructure and a server; the point of this tool is zero external dependencies |
-| `chrome.storage.local` | Full chat index, embeddings, queue state, diagnostic ring buffer, `devMode` flag | IndexedDB — more capable but overkill; the record sizes and access patterns here fit key-value storage without needing cursor-based iteration |
-| MiniSearch v7.2.0 (vendored) | Client-side BM25 full-text search over first/last message fields | Lunr.js — no built-in fuzzy matching; Flexsearch — different scoring model, less composable with custom ranking logic |
-| Google Gemini `gemini-embedding-001` | 768-dim dense vectors for semantic search | Xenova/Transformers.js + ONNX — works offline but adds 100MB+ to the extension package, which Chrome Web Store caps at 128MB total |
-| TypeScript 5.x | Type safety on the four search and embedding modules | Plain JS — the storage schemas have enough structural complexity (discriminated unions, optional fields, nested generics) that runtime type errors would be a real debugging cost |
-| esbuild 0.28.1 | Compiles TS to IIFE scripts; injects `EMBEDDING_KEY` from `.env` at build time | Webpack — unnecessary overhead for a project with 4 compiled files and no module graph complexity |
-| Vanilla CSS | Dark-mode popup dashboard with HSL tokens, custom scrollbars, keyframe animations | Tailwind — the popup is a fixed-size single-page panel; utility classes add more complexity than they remove at this surface area |
-| `dev-mode.js` (custom) | Context-level console interception; persistent dev flag via storage; 5-tap easter egg toggle | Per-call `DEBUG` guards — scatters conditional logic across every file; environment variables — not resolvable at runtime for unpacked extensions with no build distinction between installs |
+| Technology                           | Role in this project                                                                                                | Why not X                                                                                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chrome Extension APIs (MV3)          | Content injection, cookie management, `declarativeNetRequest`, storage, service worker                              | MV2 — deprecated; Chrome is actively blocking MV2 extensions from the Web Store                                                                                                              |
+| `chrome.storage.sync`                | Cross-profile chat sync (accounts + recent chats, compacted to single-char keys to fit the 8192-byte per-key limit) | Firebase / custom backend — requires auth infrastructure and a server; the point of this tool is zero external dependencies                                                                  |
+| `chrome.storage.local`               | Full chat index, embeddings, queue state, diagnostic ring buffer, `devMode` flag                                    | IndexedDB — more capable but overkill; the record sizes and access patterns here fit key-value storage without needing cursor-based iteration                                                |
+| MiniSearch v7.2.0 (vendored)         | Client-side BM25 full-text search over first/last message fields                                                    | Lunr.js — no built-in fuzzy matching; Flexsearch — different scoring model, less composable with custom ranking logic                                                                        |
+| Google Gemini `gemini-embedding-001` | 768-dim dense vectors for semantic search                                                                           | Xenova/Transformers.js + ONNX — works offline but adds 100MB+ to the extension package, which Chrome Web Store caps at 128MB total                                                           |
+| TypeScript 5.x                       | Type safety on the four search and embedding modules                                                                | Plain JS — the storage schemas have enough structural complexity (discriminated unions, optional fields, nested generics) that runtime type errors would be a real debugging cost            |
+| esbuild 0.28.1                       | Compiles TS to IIFE scripts; injects `EMBEDDING_KEY` from `.env` at build time                                      | Webpack — unnecessary overhead for a project with 4 compiled files and no module graph complexity                                                                                            |
+| Vanilla CSS                          | Dark-mode popup dashboard with HSL tokens, custom scrollbars, keyframe animations                                   | Tailwind — the popup is a fixed-size single-page panel; utility classes add more complexity than they remove at this surface area                                                            |
+| `dev-mode.js` (custom)               | Context-level console interception; persistent dev flag via storage; 5-tap easter egg toggle                        | Per-call `DEBUG` guards — scatters conditional logic across every file; environment variables — not resolvable at runtime for unpacked extensions with no build distinction between installs |
 
 ---
 
 ## Quick Start
 
 ### Option A: Load Pre-Built Release (No Setup Needed)
+
 Since pre-compiled build artifacts are tracked and committed inside the `dist/` directory, you can run the extension immediately without setting up Node.js or compiling code:
 
 1. **Download the source repository**: Click the green **Code** button and select **Download ZIP** (or clone the repository using Git). Extract the ZIP archive.
-2. **Load into Chrome**: 
+2. **Load into Chrome**:
    - Open Chrome and navigate to `chrome://extensions/`.
    - Enable **Developer mode** using the toggle switch in the top-right corner.
    - Click the **Load unpacked** button in the top-left corner.
@@ -187,6 +188,7 @@ Since pre-compiled build artifacts are tracked and committed inside the `dist/` 
 ---
 
 ### Option B: Build from Source (For Custom Key Embedding)
+
 If you prefer to modify the codebase or embed a default Gemini API key directly into the compiled package:
 
 **Prerequisites**: Chrome 120+, Node.js 18+
@@ -215,6 +217,13 @@ If you prefer to modify the codebase or embed a default Gemini API key directly 
 To enable semantic search with background indexing, open the settings drawer in the popup, input your API key, and toggle the mode. The background indexer runs at a 2.5-second interval to stay within rate limits.
 
 ---
+
+## Screenshots
+
+<p align="center">
+  <img src="assets/image.png" width="350" alt="Claude Chat Tracker Main Interface" />
+  <img src="assets/image-1.png" width="350" alt="Claude Chat Tracker Settings" />
+</p>
 
 ## What I'd Do Next
 

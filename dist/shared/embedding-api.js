@@ -31,5 +31,4 @@
     return data.embedding.values;
   }
   window.generateEmbedding = generateEmbedding;
-  window.DEFAULT_EMBEDDING_KEY = "REMOVED";
 })();

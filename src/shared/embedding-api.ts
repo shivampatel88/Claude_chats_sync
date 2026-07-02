@@ -54,8 +54,8 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
   return data.embedding.values;
 }
 
-// Expose on window so popup.js and content scripts (plain JS) can call this
+// Expose on window so popup.js and content scripts (plain JS) can call this.
+// NOTE: No API key is compiled into this file. The key is stored securely in
+// chrome.storage.local (set once via the Settings drawer UI) and read at
+// runtime via state.semanticSettings.apiKey in popup.js.
 (window as any).generateEmbedding = generateEmbedding;
-
-declare const process: any;
-(window as any).DEFAULT_EMBEDDING_KEY = process.env.EMBEDDING_KEY || '';
