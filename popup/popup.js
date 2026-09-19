@@ -832,7 +832,7 @@ async function triggerIndexing(account, isAuto = false) {
         console.warn("[CCT] Auto-indexing call failed: could not reach Claude tab.", err);
       }
     });
-}
+
   if (!indexProgressPollTimer) {
     indexProgressPollTimer = setInterval(
       () => updateIndexStatusUI(account),
