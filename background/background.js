@@ -1,6 +1,7 @@
 "use strict";
 
 importScripts("../shared/shared.js");
+importScripts("../shared/session-vault.js");
 
 // IMP-01: Background service worker that owns all chrome.storage.sync writes.
 // This prevents the content script and popup from racing on chunk writes when both
@@ -253,6 +254,209 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async () => {
       await clearLoginHintRule();
       sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  // VAULT_CAPTURE_SESSION: captures active session into vault
+  if (message.type === "VAULT_CAPTURE_SESSION") {
+    const { accountId, email, orgId } = message;
+    (async () => {
+      try {
+        if (self.CctVault && accountId) {
+          const res = await self.CctVault.captureSession(accountId, email, orgId);
+          sendResponse({ ok: Boolean(res), count: res?.cookies?.length || 0 });
+          return;
+        }
+        sendResponse({ ok: false, error: "Vault not available or missing accountId" });
+      } catch (err) {
+        sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
+      }
+    })();
+    return true;
+  }
+
+  // VAULT_RESTORE_SESSION: restores saved session into browser cookie jar
+  if (message.type === "VAULT_RESTORE_SESSION") {
+    const { accountId } = message;
+    (async () => {
+      try {
+        if (self.CctVault && accountId) {
+          const res = await self.CctVault.restoreSession(accountId);
+          sendResponse(res);
+          return;
+        }
+        sendResponse({ ok: false, error: "Vault not available or missing accountId" });
+      } catch (err) {
+        sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
+      }
+    })();
+    return true;
+  }
+
+  // VAULT_SYNC_ACCOUNT: performs transient background swap, fetches conversations from Claude API,
+  // syncs them to storage, and immediately restores original active session cookies!
+  if (message.type === "VAULT_SYNC_ACCOUNT") {
+    const { targetAccountId } = message;
+    bgLog(`⚡ VAULT_SYNC_ACCOUNT requested for: ${targetAccountId}`);
+    (async () => {
+      if (!self.CctVault) {
+        sendResponse({ ok: false, error: "Session vault not loaded" });
+        return;
+      }
+      const data = await chrome.storage.local.get(["sessionVault", "currentAccountId", "accounts", "chats"]);
+      const vault = data.sessionVault || {};
+      const targetSession = vault[targetAccountId];
+
+      if (!targetSession || !Array.isArray(targetSession.cookies) || targetSession.cookies.length === 0) {
+        sendResponse({
+          ok: false,
+          needsLogin: true,
+          error: "No active session in vault for this account. Please open this account once to initialize the session vault.",
+        });
+        return;
+      }
+
+      const activeAccountId = data.currentAccountId;
+      // Snapshot current browser cookies before swapping
+      const activeCookies = await self.CctVault.getActiveClaudeCookies();
+
+      let targetOrgId = targetSession.orgId;
+      let newChatsCount = 0;
+
+      try {
+        // 1. Transient Swap: inject target account's cookies into the cookie jar
+        await self.CctVault.clearClaudeCookies();
+        await self.CctVault.injectCookies(targetSession.cookies);
+
+        // 2. Resolve organization UUID if missing
+        if (!targetOrgId) {
+          try {
+            const orgRes = await fetch("https://claude.ai/api/organizations", {
+              credentials: "include",
+              headers: { Accept: "application/json" },
+            });
+            if (orgRes.status === 401 || orgRes.status === 403) {
+              await self.CctVault.markSessionExpired(targetAccountId);
+              sendResponse({
+                ok: false,
+                expired: true,
+                error: "Session expired for target account. Please re-authenticate.",
+              });
+              return;
+            }
+            if (orgRes.ok) {
+              const orgData = await orgRes.json();
+              const orgs = Array.isArray(orgData) ? orgData : orgData.organizations || [];
+              const org = orgs.find((o) => !o.is_default_org) || orgs[0];
+              if (org && (org.uuid || org.id)) {
+                targetOrgId = org.uuid || org.id;
+                targetSession.orgId = targetOrgId;
+                await chrome.storage.local.set({ sessionVault: vault });
+              }
+            }
+          } catch (orgErr) {
+            bgWarn("Failed to resolve orgId during vault sync:", orgErr);
+          }
+        }
+
+        if (!targetOrgId) {
+          sendResponse({ ok: false, error: "Could not resolve organization ID for account." });
+          return;
+        }
+
+        // 3. Fetch conversations from Claude REST API
+        const convRes = await fetch(
+          `https://claude.ai/api/organizations/${targetOrgId}/chat_conversations?limit=100`,
+          { credentials: "include", headers: { Accept: "application/json" } }
+        );
+
+        if (convRes.status === 401 || convRes.status === 403) {
+          await self.CctVault.markSessionExpired(targetAccountId);
+          sendResponse({
+            ok: false,
+            expired: true,
+            error: "Session expired for target account. Please re-authenticate.",
+          });
+          return;
+        }
+
+        if (!convRes.ok) {
+          sendResponse({ ok: false, error: `Claude API returned status ${convRes.status}` });
+          return;
+        }
+
+        const convData = await convRes.json();
+        const rawConvs = Array.isArray(convData)
+          ? convData
+          : convData.conversations || convData.chat_conversations || [];
+
+        const incomingChats = {};
+        const now = Date.now();
+        for (const c of rawConvs) {
+          const chatId = c.uuid || c.id;
+          if (!chatId) continue;
+          const storageId = `${targetAccountId}:${chatId}`;
+          const title = (c.name || c.title || "Untitled Chat").trim();
+          const updatedAt = c.updated_at ? new Date(c.updated_at).getTime() : now;
+          incomingChats[storageId] = {
+            storageId,
+            chatId,
+            accountId: targetAccountId,
+            title,
+            url: `https://claude.ai/chat/${chatId}`,
+            firstSeen: updatedAt || now,
+            lastSeen: now,
+            serverUpdatedAt: updatedAt || null,
+            sectionTimestamp: null,
+            sidebarOrder: 0,
+            orderSeenAt: now,
+          };
+        }
+
+        // 4. Merge new chats into storage and sync
+        const accounts = data.accounts || {};
+        const targetAccount = accounts[targetAccountId] || {
+          accountId: targetAccountId,
+          email: targetSession.email || null,
+          displayName: targetSession.email ? targetSession.email.split("@")[0] : "Claude Account",
+          firstSeen: now,
+          lastSeen: now,
+        };
+        targetAccount.lastSeen = now;
+        accounts[targetAccountId] = targetAccount;
+
+        // Queue write via existing sync pipeline
+        syncQueue.push({
+          accounts: { [targetAccountId]: targetAccount },
+          chats: incomingChats,
+          deletedAccounts: {},
+          deletedChatIds: [],
+          resolve: () => {},
+        });
+        processQueue();
+
+        newChatsCount = Object.keys(incomingChats).length;
+        bgLog(`✅ VAULT_SYNC_ACCOUNT completed: synced ${newChatsCount} chats for ${targetAccountId}`);
+        sendResponse({ ok: true, syncedCount: newChatsCount, targetAccountId });
+      } catch (syncErr) {
+        bgWarn("VAULT_SYNC_ACCOUNT error:", syncErr);
+        sendResponse({ ok: false, error: syncErr && syncErr.message ? syncErr.message : String(syncErr) });
+      } finally {
+        // 5. Unconditional Restoration: ALWAYS restore the original active account's cookies!
+        try {
+          await self.CctVault.clearClaudeCookies();
+          if (activeCookies.length > 0) {
+            await self.CctVault.injectCookies(activeCookies);
+          }
+          if (activeAccountId) {
+            await chrome.storage.local.set({ currentAccountId: activeAccountId });
+          }
+          bgLog("🔄 Restored original active session cookies.");
+        } catch (restoreErr) {
+          bgWarn("Error restoring active session cookies in finally block:", restoreErr);
+        }
+      }
     })();
     return true;
   }

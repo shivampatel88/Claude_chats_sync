@@ -1456,3 +1456,76 @@ input {
   color: #D9784A;
   font-weight: 500;
 }
+
+/* Session Vault & Background Sync UI */
+.acct-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-item-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.acct-item-badge.active {
+  background: rgba(101, 196, 136, 0.15);
+  color: var(--green);
+  border: 1px solid rgba(101, 196, 136, 0.3);
+}
+
+.acct-item-badge.vault {
+  background: rgba(112, 168, 255, 0.15);
+  color: var(--blue);
+  border: 1px solid rgba(112, 168, 255, 0.3);
+}
+
+.acct-item-badge.expired {
+  background: rgba(238, 124, 118, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(238, 124, 118, 0.3);
+}
+
+.acct-quick-sync-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.acct-filter-menu li:hover .acct-quick-sync-btn {
+  display: inline-flex;
+}
+
+.acct-quick-sync-btn:hover {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.index-status .index-btn.primary {
+  background: var(--accent);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-weight: 600;
+}
+
+.index-status .index-btn.primary:hover {
+  background: #e28854;
+  box-shadow: 0 4px 12px rgba(216, 122, 69, 0.35);
+}

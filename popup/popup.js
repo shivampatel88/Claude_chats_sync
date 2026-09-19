@@ -152,6 +152,7 @@ let state = {
   // Phase B
   semanticSettings: null, // { enabled, apiKey } or null
   searchMode: "hybrid", // Default search mode: 'text' | 'semantic' | 'hybrid'
+  vaultMeta: {}, // Account session vault metadata
 };
 
 // BUG-01 fix: re-entrancy guard — set to true while we are writing to chrome.storage.sync
@@ -572,11 +573,182 @@ function renderStatus() {
   }
 }
 
+async function updateVaultStatusUI(account) {
+  const vaultContainer = document.getElementById("vaultStatusContainer");
+  if (!vaultContainer || !account) return;
+  vaultContainer.replaceChildren();
+
+  const isCurrent = account.accountId === state.currentAccountId;
+  let hasSaved = false;
+  let isExpired = false;
+
+  if (window.CctVault) {
+    hasSaved = await window.CctVault.hasSavedSession(account.accountId);
+    const meta = (await window.CctVault.getAllSessionMetadata()) || {};
+    const accMeta = meta[account.accountId];
+    if (accMeta) {
+      isExpired = Boolean(accMeta.expired);
+    }
+  }
+
+  // Left status label
+  const statusLabel = document.createElement("div");
+  statusLabel.style.display = "flex";
+  statusLabel.style.alignItems = "center";
+  statusLabel.style.gap = "6px";
+  statusLabel.style.minWidth = "0";
+
+  if (isCurrent) {
+    const text = document.createElement("span");
+    text.textContent = "Active in browser";
+    const badge = document.createElement("span");
+    badge.className = "acct-item-badge active";
+    badge.textContent = "Current";
+    statusLabel.append(text, badge);
+  } else if (hasSaved) {
+    const text = document.createElement("span");
+    text.textContent = "Ready in Vault";
+    const badge = document.createElement("span");
+    badge.className = "acct-item-badge vault";
+    badge.textContent = "⚡ Ready";
+    statusLabel.append(text, badge);
+  } else if (isExpired) {
+    const text = document.createElement("span");
+    text.textContent = "Session Expired";
+    const badge = document.createElement("span");
+    badge.className = "acct-item-badge expired";
+    badge.textContent = "⚠️ Re-login";
+    statusLabel.append(text, badge);
+  } else {
+    const text = document.createElement("span");
+    text.textContent = "No saved session";
+    const badge = document.createElement("span");
+    badge.className = "acct-item-badge";
+    badge.style.background = "rgba(255,255,255,0.06)";
+    badge.style.color = "var(--muted)";
+    badge.textContent = "Needs Login";
+    statusLabel.append(text, badge);
+  }
+
+  // Right actions row
+  const actionsRow = document.createElement("div");
+  actionsRow.style.display = "flex";
+  actionsRow.style.alignItems = "center";
+  actionsRow.style.gap = "6px";
+
+  // 1. Sync Chats button (available if hasSaved or isCurrent)
+  const syncBtn = document.createElement("button");
+  syncBtn.className = "index-btn primary has-tooltip";
+  syncBtn.textContent = "Sync Chats";
+  syncBtn.setAttribute(
+    "data-tooltip",
+    "Sync latest chats headlessly in background without switching accounts"
+  );
+  syncBtn.onclick = async () => {
+    syncBtn.disabled = true;
+    syncBtn.textContent = "Syncing...";
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "VAULT_SYNC_ACCOUNT",
+        targetAccountId: account.accountId,
+      });
+      if (res && res.ok) {
+        syncBtn.textContent = `✓ Synced ${res.syncedCount || 0}`;
+        await reloadData();
+        setTimeout(() => {
+          render();
+        }, 1800);
+      } else if (res && res.expired) {
+        syncBtn.textContent = "Expired";
+        alert("Session for this account has expired. Please switch or log in once to re-authenticate.");
+        await reloadData();
+        render();
+      } else if (res && res.needsLogin) {
+        syncBtn.textContent = "Needs Login";
+        alert("No saved session found in vault. Please switch or log in to this account once to enable background sync.");
+        render();
+      } else {
+        syncBtn.textContent = "Failed";
+        alert(res?.error || "Sync failed. Please check your internet connection.");
+        setTimeout(() => {
+          render();
+        }, 1800);
+      }
+    } catch (err) {
+      syncBtn.textContent = "Error";
+      setTimeout(() => {
+        render();
+      }, 1800);
+    }
+  };
+  actionsRow.appendChild(syncBtn);
+
+  // 2. Switch button (only if not current)
+  if (!isCurrent) {
+    const switchBtn = document.createElement("button");
+    switchBtn.className = "index-btn has-tooltip";
+    switchBtn.textContent = "Switch";
+    switchBtn.setAttribute(
+      "data-tooltip",
+      hasSaved
+        ? "Instantly switch browser session to this account"
+        : "Log in to this account to save it into the vault"
+    );
+    switchBtn.onclick = async () => {
+      if (hasSaved) {
+        if (state.currentAccountId) {
+          const curAcct = state.accounts[state.currentAccountId] || {};
+          await window.CctVault.captureSession(state.currentAccountId, curAcct.email);
+        }
+        const restoreRes = await window.CctVault.restoreSession(account.accountId);
+        if (restoreRes && restoreRes.ok) {
+          state.currentAccountId = account.accountId;
+          await storageSet({
+            currentAccountId: account.accountId,
+            pendingOpen: null,
+          });
+          chrome.runtime.sendMessage({ type: "CLEAR_LOGIN_HINT" }).catch(() => {});
+          chrome.tabs.create({ url: "https://claude.ai/chats" });
+          window.close();
+          return;
+        }
+      }
+
+      // Standard OAuth login flow fallback
+      state.currentAccountId = account.accountId;
+      await storageSet({
+        currentAccountId: account.accountId,
+        pendingOpen: {
+          accountId: account.accountId,
+          accountEmail: account.email || null,
+          accountName: shortAccountName(account),
+          previousAccountName: shortAccountName(state.accounts[state.currentAccountId] || {}),
+          chatTitle: "Chats",
+          chatUrl: "https://claude.ai/chats",
+          createdAt: Date.now(),
+          googleStarted: false,
+          loginStartedAt: null,
+        },
+      });
+      await clearClaudeSession();
+      if (account.email) {
+        chrome.runtime.sendMessage({ type: "SET_LOGIN_HINT", email: account.email }).catch(() => {});
+      }
+      chrome.tabs.create({ url: "https://claude.ai/login" });
+      window.close();
+    };
+    actionsRow.appendChild(switchBtn);
+  }
+
+  vaultContainer.append(statusLabel, actionsRow);
+}
+
 async function updateIndexStatusUI(account) {
   const drawerAccountNameEl = document.getElementById("drawerAccountName");
   if (drawerAccountNameEl && account) {
     drawerAccountNameEl.textContent = shortAccountName(account);
   }
+  await updateVaultStatusUI(account);
 
   const drawerAccountStats = document.getElementById("drawerAccountStats");
   const statTotalChats = document.getElementById("statTotalChats");
@@ -861,8 +1033,61 @@ function renderFilters() {
 
     const text = document.createElement("span");
     text.textContent = label;
+    text.className = "acct-item-text";
 
     li.append(dot, text);
+
+    if (accountId !== "all") {
+      const isCur = accountId === state.currentAccountId;
+      const vMeta = state.vaultMeta && state.vaultMeta[accountId];
+      const hasVault = vMeta && !vMeta.expired;
+
+      if (isCur) {
+        const badge = document.createElement("span");
+        badge.className = "acct-item-badge active";
+        badge.textContent = "Active";
+        badge.title = "Currently active session in browser";
+        li.appendChild(badge);
+      } else if (hasVault) {
+        const badge = document.createElement("span");
+        badge.className = "acct-item-badge vault";
+        badge.textContent = "⚡ Vault";
+        badge.title = "Saved in vault: 1-click switch & background sync ready";
+        li.appendChild(badge);
+      } else if (vMeta && vMeta.expired) {
+        const badge = document.createElement("span");
+        badge.className = "acct-item-badge expired";
+        badge.textContent = "Expired";
+        badge.title = "Session expired; re-authenticate to restore vault";
+        li.appendChild(badge);
+      }
+
+      // Quick background sync icon button for ready accounts
+      if (hasVault || isCur) {
+        const syncBtn = document.createElement("button");
+        syncBtn.className = "acct-quick-sync-btn";
+        syncBtn.title = `Sync chats from ${label} in background`;
+        syncBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-4.6a6 6 0 0 0-10 2M4 17h4.6a6 6 0 0 0 10-2M20 7l-3-3M20 7l-3 3M4 17l3 3M4 17l3-3"/></svg>`;
+        syncBtn.onclick = async (e) => {
+          e.stopPropagation();
+          syncBtn.style.opacity = "0.4";
+          try {
+            const res = await chrome.runtime.sendMessage({
+              type: "VAULT_SYNC_ACCOUNT",
+              targetAccountId: accountId,
+            });
+            if (res && res.ok) {
+              await reloadData();
+            } else if (res && res.expired) {
+              alert("Session expired for this account. Please re-authenticate.");
+            }
+          } finally {
+            syncBtn.style.opacity = "1";
+          }
+        };
+        li.appendChild(syncBtn);
+      }
+    }
 
     li.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -937,6 +1162,27 @@ async function openChat(chat) {
   const currentAccount = state.accounts[state.currentAccountId] || {};
 
   if (!canOpenWithoutMismatchWarning(chat)) {
+    // 1. Instant Account Switch via Session Vault (no confirm dialog, no Google redirect)
+    if (window.CctVault && (await window.CctVault.hasSavedSession(chat.accountId))) {
+      // Snapshot current session before swapping so we never lose it
+      if (state.currentAccountId) {
+        const curAcct = state.accounts[state.currentAccountId] || {};
+        await window.CctVault.captureSession(state.currentAccountId, curAcct.email);
+      }
+      // Restore target account's session
+      const restoreRes = await window.CctVault.restoreSession(chat.accountId);
+      if (restoreRes && restoreRes.ok) {
+        state.currentAccountId = chat.accountId;
+        await storageSet({
+          currentAccountId: chat.accountId,
+          pendingOpen: null,
+        });
+        chrome.runtime.sendMessage({ type: "CLEAR_LOGIN_HINT" }).catch(() => {});
+        chrome.tabs.create({ url: chat.url });
+        return;
+      }
+    }
+
     const accountName = shortAccountName(chatAccount);
     const currentName = shortAccountName(currentAccount);
     const message =
@@ -1564,6 +1810,17 @@ async function reloadData() {
     state.semanticSettings = await window.getSemanticSettings();
   }
 
+  // Session Vault: load session metadata for all accounts & passive capture for current account
+  if (window.CctVault && window.CctVault.getAllSessionMetadata) {
+    state.vaultMeta = (await window.CctVault.getAllSessionMetadata()) || {};
+    if (state.currentAccountId && window.CctVault.captureSession) {
+      const curAcct = state.accounts[state.currentAccountId] || {};
+      window.CctVault.captureSession(state.currentAccountId, curAcct.email).catch(() => {});
+    }
+  } else {
+    state.vaultMeta = {};
+  }
+
   maybeResumeQueue();
 
   render();
@@ -1796,7 +2053,9 @@ function bindEvents() {
 
   function resetDeleteState() {
     const renameBtn = document.getElementById("renameAccountBtn");
+    const quickSyncBtn = document.getElementById("quickSyncAccountBtn");
     if (renameBtn) renameBtn.style.display = "";
+    if (quickSyncBtn) quickSyncBtn.style.display = "";
     if (startDeleteBtn) startDeleteBtn.style.display = "";
     if (deleteConfirmActions) deleteConfirmActions.style.display = "none";
     if (deleteTimeout) {
@@ -1809,7 +2068,9 @@ function bindEvents() {
     startDeleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const renameBtn = document.getElementById("renameAccountBtn");
+      const quickSyncBtn = document.getElementById("quickSyncAccountBtn");
       if (renameBtn) renameBtn.style.display = "none";
+      if (quickSyncBtn) quickSyncBtn.style.display = "none";
       startDeleteBtn.style.display = "none";
       deleteConfirmActions.style.display = "flex";
       deleteTimeout = setTimeout(() => {
@@ -1925,6 +2186,9 @@ function bindEvents() {
       if (window.deleteChatContentForAccount) {
         await window.deleteChatContentForAccount(account.accountId);
       }
+      if (window.CctVault && window.CctVault.removeSavedSession) {
+        await window.CctVault.removeSavedSession(account.accountId);
+      }
 
       // Rebuild search index after deletion
       if (window.buildSearchIndex) {
@@ -1998,6 +2262,52 @@ function bindEvents() {
         await persistData();
         render();
       });
+    });
+  }
+
+  const quickSyncAccountBtn = document.getElementById("quickSyncAccountBtn");
+  if (quickSyncAccountBtn) {
+    quickSyncAccountBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const account = selectedAccountForActions();
+      if (!account) return;
+
+      const span = quickSyncAccountBtn.querySelector("span");
+      const origText = span ? span.textContent : "Sync";
+      if (span) span.textContent = "...";
+      quickSyncAccountBtn.disabled = true;
+
+      try {
+        const res = await chrome.runtime.sendMessage({
+          type: "VAULT_SYNC_ACCOUNT",
+          targetAccountId: account.accountId,
+        });
+        if (res && res.ok) {
+          if (span) span.textContent = `✓ ${res.syncedCount || 0}`;
+          await reloadData();
+          setTimeout(() => {
+            if (span) span.textContent = origText;
+            quickSyncAccountBtn.disabled = false;
+          }, 2000);
+        } else if (res && res.expired) {
+          if (span) span.textContent = "Expired";
+          alert("Session expired for this account. Please switch to this account to log in again.");
+          await reloadData();
+          render();
+          quickSyncAccountBtn.disabled = false;
+        } else if (res && res.needsLogin) {
+          if (span) span.textContent = "Login";
+          alert("This account has not been opened in this browser yet. Switch to it once to enable background sync.");
+          quickSyncAccountBtn.disabled = false;
+        } else {
+          if (span) span.textContent = "Err";
+          alert(res?.error || "Sync failed.");
+          quickSyncAccountBtn.disabled = false;
+        }
+      } catch (err) {
+        if (span) span.textContent = "Err";
+        quickSyncAccountBtn.disabled = false;
+      }
     });
   }
 

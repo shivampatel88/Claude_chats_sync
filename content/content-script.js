@@ -913,6 +913,16 @@
         }
       }
 
+      if (cachedOrgId) {
+        const activeAccountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+        chrome.runtime.sendMessage({
+          type: "VAULT_CAPTURE_SESSION",
+          accountId: activeAccountId,
+          email: cookieDetectedEmail || null,
+          orgId: cachedOrgId,
+        }).catch(() => {});
+      }
+
       if (!data[MIGRATION_DOUBLED_TITLES_V1]) {
         cctLog("🔧 Running title-dedup migration V1…");
         await migrateDoubledTitles();
@@ -1688,6 +1698,12 @@
         `💾 saveScrape writing storage: ${chats.length} chat(s) for account ${accountId}`,
       );
       await storageSet(storagePayload);
+      chrome.runtime.sendMessage({
+        type: "VAULT_CAPTURE_SESSION",
+        accountId,
+        email: account.email || null,
+        orgId: cachedOrgId,
+      }).catch(() => {});
       // Phase 2: direct scheduleSync call.
       scheduleSync(accounts, existingChats);
       scheduleApiSync(accountId);
