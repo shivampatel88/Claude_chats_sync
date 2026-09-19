@@ -1287,6 +1287,24 @@ function renderChats() {
             ? "Semantic search paused (Rate Limited). Showing keyword results."
             : "Semantic search failed. Showing keyword results.";
           summary.classList.add("rate-limit-warning");
+          if (state.searchMode === "semantic") {
+            const contentResults = (window.searchContent && searchIndexHandle)
+              ? window.searchContent(searchIndexHandle, queryRaw, state.activeAccountId)
+              : [];
+            const fallbackChats = [...allChats];
+            const titleMatchIds = new Set(fallbackChats.map((c) => c.storageId));
+            for (const res of contentResults) {
+              const chatObj = findChat(res.storageId);
+              if (!chatObj) continue;
+              if (state.activeAccountId !== "all" && chatObj.accountId !== state.activeAccountId) continue;
+              if (!titleMatchIds.has(chatObj.storageId)) {
+                titleMatchIds.add(chatObj.storageId);
+                fallbackChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
+              }
+            }
+            fallbackChats.sort((a, b) => (b._score || 0) - (a._score || 0));
+            _renderChatListItems(list, summary, fallbackChats);
+          }
         });
     }
 

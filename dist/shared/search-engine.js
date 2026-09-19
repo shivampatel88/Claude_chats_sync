@@ -171,7 +171,7 @@
       score: r.normalizedKeyword * KEYWORD_WEIGHT + r.semanticScore * SEMANTIC_WEIGHT,
       // isStrongKeyword: keyword score must be at least 10% of the top keyword score
       isStrongKeyword: r.normalizedKeyword >= MIN_KEYWORD_SCORE_FRACTION
-    })).filter((r) => r.score >= MIN_COMBINED_SCORE).sort((a, b) => b.score - a.score).map(({ isStrongKeyword: _drop, ...r }) => r);
+    })).filter((r) => r.isStrongKeyword || r.score >= MIN_COMBINED_SCORE).sort((a, b) => b.score - a.score).map(({ isStrongKeyword: _drop, ...r }) => r);
   }
   window.searchContentHybrid = searchContentHybrid;
 })();

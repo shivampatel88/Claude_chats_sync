@@ -298,7 +298,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (!res.ok) {
           const errBody = await res.text().catch(() => "");
           bgWarn("Gemini API error:", res.status, errBody);
-          sendResponse({ ok: false, error: `Gemini API error: ${res.status}` });
+          if (res.status === 400 && (errBody.includes("API_KEY_INVALID") || errBody.includes("API key not valid"))) {
+            sendResponse({ ok: false, error: "INVALID_KEY" });
+            return;
+          }
+          sendResponse({ ok: false, error: `Gemini API error: ${res.status}${errBody ? ' - ' + errBody.slice(0, 200) : ''}` });
           return;
         }
 

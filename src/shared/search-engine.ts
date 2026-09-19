@@ -318,14 +318,12 @@ export async function searchContentHybrid(
   // 7. Compute final scores, filter noise, sort descending.
   //
   //    A result is kept when ANY of these conditions hold:
-  //      (a) It has a strong keyword match (normalizedKeyword ≥ MIN_KEYWORD_SCORE_FRACTION)
-  //          AND a combined score ≥ MIN_COMBINED_SCORE.
-  //      (b) It is a semantic-only result whose combined score ≥ MIN_COMBINED_SCORE.
-  //          (semantic-only entries already passed SEMANTIC_ONLY_THRESHOLD above)
+  //      (a) It has a strong keyword match (normalizedKeyword ≥ MIN_KEYWORD_SCORE_FRACTION, i.e. ≥ 10% of top BM25).
+  //      (b) Its combined score ≥ MIN_COMBINED_SCORE (e.g. semantic match or semantic + weak keyword).
   //
   //    The old code used `r.hasKeyword` (normalizedKeyword > 0) as a free pass,
   //    which meant even a near-zero BM25 hit — e.g. "aws" fuzzy-matching "awesome" —
-  //    would always appear in results.  That is the root cause of the noise.
+  //    would always appear in results.  Now only strong keyword hits or results meeting the score floor are kept.
   return Array.from(merged.values())
     .map((r) => ({
       storageId: r.storageId,
@@ -336,7 +334,7 @@ export async function searchContentHybrid(
       // isStrongKeyword: keyword score must be at least 10% of the top keyword score
       isStrongKeyword: r.normalizedKeyword >= MIN_KEYWORD_SCORE_FRACTION,
     }))
-    .filter((r) => r.score >= MIN_COMBINED_SCORE)
+    .filter((r) => r.isStrongKeyword || r.score >= MIN_COMBINED_SCORE)
     .sort((a, b) => b.score - a.score)
     .map(({ isStrongKeyword: _drop, ...r }) => r);
 }

@@ -139,10 +139,11 @@
       const state = await this.loadState();
       if (!state) return;
       if (state.status === "paused-ratelimited") {
+        const cooldown = state.rateLimitCooldownMs ?? this.rateLimitPauseMs;
         const elapsed = Date.now() - (state.pausedAt ?? 0);
-        if (elapsed < this.rateLimitPauseMs) {
+        if (elapsed < cooldown) {
           cctLog(
-            `Queue is ratelimited, still in cooldown for ${Math.round((this.rateLimitPauseMs - elapsed) / 1e3)}s`
+            `Queue is ratelimited, still in cooldown for ${Math.round((cooldown - elapsed) / 1e3)}s`
           );
           return;
         }
@@ -163,6 +164,7 @@
         }
       }
       state.status = "running";
+      delete state.rateLimitCooldownMs;
       await this.saveState(state);
       this._scheduleNext(0);
     }
@@ -176,7 +178,22 @@
       this.isProcessing = true;
       try {
         const state = await this.loadState();
-        if (!state || state.status !== "running") return;
+        if (!state) return;
+        if (state.status === "paused-ratelimited") {
+          const cooldown = state.rateLimitCooldownMs ?? this.rateLimitPauseMs;
+          const elapsed = Date.now() - (state.pausedAt ?? 0);
+          if (elapsed >= cooldown) {
+            cctLog(`Rate limit cooldown of ${cooldown}ms elapsed. Resuming queue...`);
+            state.status = "running";
+            delete state.rateLimitCooldownMs;
+            await this.saveState(state);
+          } else {
+            const remaining = cooldown - elapsed;
+            this._scheduleNext(remaining);
+            return;
+          }
+        }
+        if (state.status !== "running") return;
         if (document.hidden) {
           cctLog(`Tab is hidden, pausing queue...`);
           state.status = "paused-tab-hidden";
@@ -254,6 +271,7 @@
                   state.doneChatIds.pop();
                   state.status = "paused-ratelimited";
                   state.pausedAt = Date.now();
+                  state.rateLimitCooldownMs = 15e3;
                   await this.saveState(state);
                   this._scheduleNext(15e3);
                   return;
@@ -271,7 +289,9 @@
             state.pendingChatIds.unshift(chatId);
             state.status = "paused-ratelimited";
             state.pausedAt = Date.now();
+            state.rateLimitCooldownMs = this.rateLimitPauseMs;
             await this.saveState(state);
+            this._scheduleNext(this.rateLimitPauseMs);
             return;
           } else {
             cctWarn(`Failed to process chat ${chatId}:`, err);
@@ -297,6 +317,16 @@
   }
   async function indexAccount(accountId, orgId, apiKey) {
     cctLog(`indexAccount called for account ${accountId}`);
+    let effectiveApiKey = apiKey;
+    if (!effectiveApiKey && window.getSemanticSettings) {
+      try {
+        const settings = await window.getSemanticSettings();
+        if (settings && settings.enabled && settings.apiKey) {
+          effectiveApiKey = settings.apiKey;
+        }
+      } catch (_) {
+      }
+    }
     const internalBridge = window.__cctInternal ?? {};
     if (!orgId) {
       if (internalBridge.fetchOrganizationId) {
@@ -340,7 +370,8 @@
       updatedAtMap[chat.chatId] = serverTime;
       const existing = indexedMap.get(chat.chatId);
       const storageId = `${targetAccountId}:${chat.chatId}`;
-      const needsEmbedding = apiKey && !existingEmbeddings[storageId];
+      const hasEmbeddableContent = !existing || Boolean(((existing.firstMessage || "") + " " + (existing.lastMessage || "")).trim());
+      const needsEmbedding = !!effectiveApiKey && !existingEmbeddings[storageId] && hasEmbeddableContent;
       const isUpToDate = existing && existing.serverUpdatedAt > 0 && existing.serverUpdatedAt === serverTime;
       if (isUpToDate && !needsEmbedding) {
         continue;
@@ -348,7 +379,7 @@
       chatIdsToProcess.push(chat.chatId);
     }
     cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-    await queue.start(targetAccountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
+    await queue.start(targetAccountId, orgId, chatIdsToProcess, updatedAtMap, effectiveApiKey);
   }
   async function waitForBridge() {
     const timeoutMs = 3e4;

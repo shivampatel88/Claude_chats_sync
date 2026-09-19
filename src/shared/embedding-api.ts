@@ -30,36 +30,36 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
   // In MV3, content scripts on claude.ai cannot fetch cross-origin to generativelanguage.googleapis.com
   // due to CORS restrictions. Route requests through the privileged background service worker first.
   if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+    let responded = false;
+    let bgResult: { ok: boolean; values?: number[]; error?: string } | null = null;
     try {
-      const bgResp = await new Promise<{ ok: boolean; values?: number[]; error?: string }>((resolve) => {
+      bgResult = await new Promise<{ ok: boolean; values?: number[]; error?: string } | null>((resolve) => {
         try {
           chrome.runtime.sendMessage(
             { type: 'GENERATE_EMBEDDING', text: cleanText, apiKey },
             (response) => {
               if (chrome.runtime.lastError) {
-                resolve({ ok: false, error: chrome.runtime.lastError.message });
+                // Background worker unavailable or disconnected
+                resolve(null);
               } else {
+                responded = true;
                 resolve(response || { ok: false, error: 'Empty background response' });
               }
             }
           );
-        } catch (sendErr: any) {
-          resolve({ ok: false, error: sendErr && sendErr.message ? sendErr.message : String(sendErr) });
+        } catch {
+          resolve(null);
         }
       });
+    } catch {
+      bgResult = null;
+    }
 
-      if (bgResp && bgResp.ok && Array.isArray(bgResp.values)) {
-        return bgResp.values;
+    if (responded && bgResult) {
+      if (bgResult.ok && Array.isArray(bgResult.values)) {
+        return bgResult.values;
       }
-      if (bgResp && bgResp.error) {
-        if (bgResp.error === 'INVALID_KEY' || bgResp.error === 'RATE_LIMITED') {
-          throw new Error(bgResp.error);
-        }
-      }
-    } catch (err: any) {
-      if (err && (err.message === 'INVALID_KEY' || err.message === 'RATE_LIMITED')) {
-        throw err;
-      }
+      throw new Error(bgResult.error || 'Failed to generate embedding');
     }
   }
 
@@ -84,7 +84,11 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
     throw new Error('RATE_LIMITED');
   }
   if (!res.ok) {
-    throw new Error(`Gemini API error: ${res.status}`);
+    const errText = await res.text().catch(() => '');
+    if (res.status === 400 && (errText.includes('API_KEY_INVALID') || errText.includes('API key not valid'))) {
+      throw new Error('INVALID_KEY');
+    }
+    throw new Error(`Gemini API error: ${res.status}${errText ? ' - ' + errText.slice(0, 200) : ''}`);
   }
 
   const data = (await res.json()) as { embedding?: { values: number[] } };

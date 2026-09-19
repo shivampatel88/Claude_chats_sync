@@ -27,6 +27,7 @@ interface QueueState {
   updatedAtMap: Record<string, number>;
   // Phase B: embedding error flag (no API key stored in persisted state)
   embeddingError: 'invalid-key' | 'rate-limited' | null;
+  rateLimitCooldownMs?: number;
 }
 
 interface CctInternal {
@@ -247,10 +248,11 @@ export class IndexingQueue {
     if (!state) return;
 
     if (state.status === 'paused-ratelimited') {
+      const cooldown = state.rateLimitCooldownMs ?? this.rateLimitPauseMs;
       const elapsed = Date.now() - (state.pausedAt ?? 0);
-      if (elapsed < this.rateLimitPauseMs) {
+      if (elapsed < cooldown) {
         cctLog(
-          `Queue is ratelimited, still in cooldown for ${Math.round((this.rateLimitPauseMs - elapsed) / 1000)}s`,
+          `Queue is ratelimited, still in cooldown for ${Math.round((cooldown - elapsed) / 1000)}s`,
         );
         return;
       }
@@ -278,6 +280,7 @@ export class IndexingQueue {
     }
 
     state.status = 'running';
+    delete state.rateLimitCooldownMs;
     await this.saveState(state);
     this._scheduleNext(0);
   }
@@ -293,7 +296,26 @@ export class IndexingQueue {
     this.isProcessing = true;
     try {
       const state = await this.loadState();
-      if (!state || state.status !== 'running') return;
+      if (!state) return;
+
+      // If the queue was paused due to rate limiting, check if the cooldown has elapsed
+      if (state.status === 'paused-ratelimited') {
+        const cooldown = state.rateLimitCooldownMs ?? this.rateLimitPauseMs;
+        const elapsed = Date.now() - (state.pausedAt ?? 0);
+        if (elapsed >= cooldown) {
+          cctLog(`Rate limit cooldown of ${cooldown}ms elapsed. Resuming queue...`);
+          state.status = 'running';
+          delete state.rateLimitCooldownMs;
+          await this.saveState(state);
+        } else {
+          // Still in cooldown; reschedule for remaining time
+          const remaining = cooldown - elapsed;
+          this._scheduleNext(remaining);
+          return;
+        }
+      }
+
+      if (state.status !== 'running') return;
 
       if (document.hidden) {
         cctLog(`Tab is hidden, pausing queue...`);
@@ -396,6 +418,7 @@ export class IndexingQueue {
                 state.doneChatIds.pop();
                 state.status = 'paused-ratelimited';
                 state.pausedAt = Date.now();
+                state.rateLimitCooldownMs = 15000;
                 await this.saveState(state);
                 this._scheduleNext(15000);
                 return;
@@ -417,7 +440,9 @@ export class IndexingQueue {
           state.pendingChatIds.unshift(chatId);
           state.status = 'paused-ratelimited';
           state.pausedAt = Date.now();
+          state.rateLimitCooldownMs = this.rateLimitPauseMs;
           await this.saveState(state);
+          this._scheduleNext(this.rateLimitPauseMs);
           return;
         } else {
           cctWarn(`Failed to process chat ${chatId}:`, err);
@@ -450,6 +475,17 @@ export class IndexingQueue {
 
 export async function indexAccount(accountId: string, orgId: string, apiKey?: string | null): Promise<void> {
   cctLog(`indexAccount called for account ${accountId}`);
+
+  // Resolve API key from semantic settings if not explicitly provided
+  let effectiveApiKey = apiKey;
+  if (!effectiveApiKey && window.getSemanticSettings) {
+    try {
+      const settings = await window.getSemanticSettings();
+      if (settings && settings.enabled && settings.apiKey) {
+        effectiveApiKey = settings.apiKey;
+      }
+    } catch (_) {}
+  }
 
   const internalBridge = window.__cctInternal ?? {};
 
@@ -509,7 +545,8 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
     updatedAtMap[chat.chatId] = serverTime;
     const existing = indexedMap.get(chat.chatId);
     const storageId = `${targetAccountId}:${chat.chatId}`;
-    const needsEmbedding = apiKey && !existingEmbeddings[storageId];
+    const hasEmbeddableContent = !existing || Boolean(((existing.firstMessage || '') + ' ' + (existing.lastMessage || '')).trim());
+    const needsEmbedding = !!effectiveApiKey && !existingEmbeddings[storageId] && hasEmbeddableContent;
     const isUpToDate = existing && existing.serverUpdatedAt > 0 && existing.serverUpdatedAt === serverTime;
     if (isUpToDate && !needsEmbedding) {
       // Already indexed and up to date and embedding present (if semantic enabled)
@@ -519,7 +556,7 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
   }
 
   cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-  await queue.start(targetAccountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
+  await queue.start(targetAccountId, orgId, chatIdsToProcess, updatedAtMap, effectiveApiKey);
 }
 
 // ─── 5. waitForBridge ────────────────────────────────────────────────
