@@ -160,15 +160,16 @@ function mergeChats(
       continue;
 
     // ── PHANTOM-SCRAPE COLLISION DETECTOR ────────────────────────────────────
-    // A chatId appearing under two different real (non-fallback) accountIds is
+    // A chatId appearing under two different modern (acc_org_) accounts is
     // the exact signature of a phantom scrape: identity resolved to the wrong
     // account while the sidebar was showing another account's chats.
+    const isLegacyAcct = (id) => typeof id !== 'string' || !id.startsWith('acc_org_');
     const existingEntries = chatIdIndex.get(chat.chatId) || [];
     const realCollisions = existingEntries.filter(
       (e) =>
         e.sid !== chat.storageId &&
-        !e.accountId.startsWith('acc_pfl_') &&
-        !chat.accountId.startsWith('acc_pfl_'),
+        !isLegacyAcct(e.accountId) &&
+        !isLegacyAcct(chat.accountId),
     );
     if (realCollisions.length > 0) {
       const collisionInfo = {
@@ -190,6 +191,15 @@ function mergeChats(
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
+
+    // If incoming chat belongs to a modern acc_org_ account, remove any legacy pre-org duplicate from merged
+    if (!isLegacyAcct(chat.accountId)) {
+      for (const e of existingEntries) {
+        if (e.sid !== chat.storageId && isLegacyAcct(e.accountId)) {
+          delete merged[e.sid];
+        }
+      }
+    }
 
     merged[chat.storageId] = mergeChatRecords(merged[chat.storageId], chat);
 

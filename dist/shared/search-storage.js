@@ -42,6 +42,9 @@
     });
   }
   async function getAllEmbeddingsForAccount(accountId) {
+    if (!accountId || accountId === "all") {
+      return getAllEmbeddings();
+    }
     const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
     return new Promise((resolve) => {
       chrome.storage.local.get([accountKey, LEGACY_EMBEDDING_KEY], (items) => {
@@ -84,6 +87,10 @@
     }
   }
   async function getAllChatContentForAccount(accountId) {
+    if (!accountId || accountId === "all") {
+      const all = await getAllIndexedEntries();
+      return Object.values(all);
+    }
     const accountKey = `${STORAGE_KEY_PREFIX}${accountId}`;
     return new Promise((resolve) => {
       chrome.storage.local.get([accountKey, LEGACY_STORAGE_KEY], (result) => {
@@ -167,27 +174,76 @@
           return;
         }
         const updates = {};
+        const chatIdToValidStorageId = /* @__PURE__ */ new Map();
+        for (const sid of validStorageIds) {
+          const parts = sid.split(":");
+          if (parts.length > 1) {
+            chatIdToValidStorageId.set(parts[1], sid);
+          }
+        }
         for (const [key, value] of Object.entries(items)) {
           if ((key.startsWith(STORAGE_KEY_PREFIX) || key === LEGACY_STORAGE_KEY) && typeof value === "object") {
             const index = value;
-            const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
-            if (staleKeys.length > 0) {
-              const newIndex = { ...index };
-              for (const k of staleKeys) delete newIndex[k];
+            let changed = false;
+            const newIndex = { ...index };
+            for (const [k, record] of Object.entries(index)) {
+              if (validStorageIds.has(k)) {
+                continue;
+              }
+              const chatId = k.includes(":") ? k.split(":")[1] : record?.chatId || k;
+              const canonicalSid = chatIdToValidStorageId.get(chatId);
+              if (canonicalSid) {
+                const newAcctId = canonicalSid.split(":")[0];
+                const targetKey = `${STORAGE_KEY_PREFIX}${newAcctId}`;
+                if (!updates[targetKey]) {
+                  updates[targetKey] = { ...items[targetKey] || {} };
+                }
+                updates[targetKey][canonicalSid] = {
+                  ...record,
+                  storageId: canonicalSid,
+                  accountId: newAcctId
+                };
+                delete newIndex[k];
+                changed = true;
+              } else {
+                delete newIndex[k];
+                changed = true;
+                prunedText++;
+              }
+            }
+            if (changed) {
               updates[key] = newIndex;
-              prunedText += staleKeys.length;
             }
           }
         }
         for (const [key, value] of Object.entries(items)) {
           if ((key.startsWith(EMBEDDING_KEY_PREFIX) || key === LEGACY_EMBEDDING_KEY) && typeof value === "object") {
             const index = value;
-            const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
-            if (staleKeys.length > 0) {
-              const newIndex = { ...index };
-              for (const k of staleKeys) delete newIndex[k];
+            let changed = false;
+            const newIndex = { ...index };
+            for (const [k, vector] of Object.entries(index)) {
+              if (validStorageIds.has(k)) {
+                continue;
+              }
+              const chatId = k.includes(":") ? k.split(":")[1] : k;
+              const canonicalSid = chatIdToValidStorageId.get(chatId);
+              if (canonicalSid) {
+                const newAcctId = canonicalSid.split(":")[0];
+                const targetKey = `${EMBEDDING_KEY_PREFIX}${newAcctId}`;
+                if (!updates[targetKey]) {
+                  updates[targetKey] = { ...items[targetKey] || {} };
+                }
+                updates[targetKey][canonicalSid] = vector;
+                delete newIndex[k];
+                changed = true;
+              } else {
+                delete newIndex[k];
+                changed = true;
+                prunedEmbeddings++;
+              }
+            }
+            if (changed) {
               updates[key] = newIndex;
-              prunedEmbeddings += staleKeys.length;
             }
           }
         }

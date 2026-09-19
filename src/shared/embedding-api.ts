@@ -20,13 +20,50 @@ const OUTPUT_DIMENSIONS = 768;
  * @throws generic Error for other HTTP failures
  */
 export async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
-  // Guard against token-limit rejections — same cap the indexer queue uses.
-  if (text.length > 2000) {
-    throw new Error(`Input too long: ${text.length} chars (max 2000)`);
+  if (!text || !text.trim()) {
+    return [];
   }
 
-  // API key sent as a header instead of a URL query param so it does not
-  // appear in browser DevTools network logs, proxies, or server access logs.
+  // Guard against token-limit rejections — same cap the indexer queue uses.
+  const cleanText = text.length > 2000 ? text.slice(0, 2000) : text;
+
+  // In MV3, content scripts on claude.ai cannot fetch cross-origin to generativelanguage.googleapis.com
+  // due to CORS restrictions. Route requests through the privileged background service worker first.
+  if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+    try {
+      const bgResp = await new Promise<{ ok: boolean; values?: number[]; error?: string }>((resolve) => {
+        try {
+          chrome.runtime.sendMessage(
+            { type: 'GENERATE_EMBEDDING', text: cleanText, apiKey },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                resolve({ ok: false, error: chrome.runtime.lastError.message });
+              } else {
+                resolve(response || { ok: false, error: 'Empty background response' });
+              }
+            }
+          );
+        } catch (sendErr: any) {
+          resolve({ ok: false, error: sendErr && sendErr.message ? sendErr.message : String(sendErr) });
+        }
+      });
+
+      if (bgResp && bgResp.ok && Array.isArray(bgResp.values)) {
+        return bgResp.values;
+      }
+      if (bgResp && bgResp.error) {
+        if (bgResp.error === 'INVALID_KEY' || bgResp.error === 'RATE_LIMITED') {
+          throw new Error(bgResp.error);
+        }
+      }
+    } catch (err: any) {
+      if (err && (err.message === 'INVALID_KEY' || err.message === 'RATE_LIMITED')) {
+        throw err;
+      }
+    }
+  }
+
+  // Direct fetch fallback (active when running in extension popup or background worker)
   const res = await fetch(GEMINI_EMBED_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -35,12 +72,12 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
     },
     body: JSON.stringify({
       model: 'models/gemini-embedding-001',
-      content: { parts: [{ text }] },
+      content: { parts: [{ text: cleanText }] },
       outputDimensionality: OUTPUT_DIMENSIONS,
     }),
   });
 
-  if (res.status === 400 || res.status === 401 || res.status === 403) {
+  if (res.status === 401 || res.status === 403) {
     throw new Error('INVALID_KEY');
   }
   if (res.status === 429) {
@@ -50,8 +87,8 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
     throw new Error(`Gemini API error: ${res.status}`);
   }
 
-  const data = await res.json() as { embedding: { values: number[] } };
-  return data.embedding.values;
+  const data = (await res.json()) as { embedding?: { values: number[] } };
+  return data && data.embedding && Array.isArray(data.embedding.values) ? data.embedding.values : [];
 }
 
 // Expose on window so popup.js and content scripts (plain JS) can call this.

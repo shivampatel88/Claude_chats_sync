@@ -457,15 +457,10 @@ function visibleChats() {
     });
   }
 
-  // Legacy cleanup filter: suppress acc_pfl_* entries when a real-account entry for the
-  // same chatId already exists. acc_pfl_* entries are never written since Phase 1
-  // (accountId is now always orgId-derived), but existing users may have them in storage
-  // from before the fix. This filter is safe to delete once those entries have aged out.
-  //
-  // We do NOT dedup when BOTH entries are under real accounts (no acc_pfl_ prefix):
-  // two genuine accounts can legitimately share a chatId (UUIDs are only namespace-unique).
-  const isFallbackAccount = (id) =>
-    typeof id === "string" && id.startsWith("acc_pfl_");
+  // Cleanup filter: prefer modern acc_org_ entries over legacy non-org entries for the
+  // same chatId. When both entries are under real modern accounts, keep both (valid cross-org data).
+  const isLegacyAccount = (id) =>
+    typeof id !== "string" || !id.startsWith("acc_org_");
   const seenChatIds = new Map(); // chatId → first winning chat object
   return chats.sort(compareChats).filter((chat) => {
     const prior = seenChatIds.get(chat.chatId);
@@ -473,10 +468,14 @@ function visibleChats() {
       seenChatIds.set(chat.chatId, chat);
       return true;
     }
-    // Only suppress when one of the two is a legacy fallback entry.
-    // If both are real accounts, show both entries; it is valid cross-account data.
-    if (isFallbackAccount(prior.accountId) || isFallbackAccount(chat.accountId))
+    // If one of the two is legacy, modern acc_org_ wins!
+    if (isLegacyAccount(prior.accountId) || isLegacyAccount(chat.accountId)) {
+      if (!isLegacyAccount(chat.accountId) && isLegacyAccount(prior.accountId)) {
+        seenChatIds.set(chat.chatId, chat);
+        return true;
+      }
       return false;
+    }
     return true;
   });
 }
@@ -786,14 +785,22 @@ async function updateIndexStatusUI(account) {
 }
 
 async function triggerIndexing(account, isAuto = false) {
-  const tabs = await chrome.tabs.query({
+  let tabs = await chrome.tabs.query({
     url: "https://claude.ai/*",
     active: true,
     currentWindow: true,
   });
   if (tabs.length === 0) {
+    tabs = await chrome.tabs.query({
+      url: "https://claude.ai/*",
+    });
+  }
+  if (tabs.length === 0) {
     if (!isAuto) {
-      alert("Please open a claude.ai tab first to start indexing.");
+      const statusContainer = document.getElementById("indexStatusContainer");
+      if (statusContainer) {
+        statusContainer.textContent = "Please open claude.ai first to start indexing.";
+      }
     }
     return;
   }
@@ -818,14 +825,14 @@ async function triggerIndexing(account, isAuto = false) {
     })
     .catch((err) => {
       if (!isAuto) {
-        alert(
-          "Could not reach Claude tab. Please refresh the claude.ai page and try again.",
-        );
+        if (statusContainer) {
+          statusContainer.textContent = "Could not reach Claude tab. Please refresh claude.ai and try again.";
+        }
       } else {
         console.warn("[CCT] Auto-indexing call failed: could not reach Claude tab.", err);
       }
     });
-
+}
   if (!indexProgressPollTimer) {
     indexProgressPollTimer = setInterval(
       () => updateIndexStatusUI(account),
@@ -1096,14 +1103,13 @@ function makeChatItem(chat) {
     const snippetEl = document.createElement("div");
     snippetEl.className = "chat-snippet";
     const escapedSnippet = chat._snippet
+      .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
-    const qToken = state.query.trim().split(/\s+/)[0];
-    if (qToken && qToken.length >= 2) {
-      const regex = new RegExp(
-        `(${qToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
-        "gi",
-      );
+    const qTokens = state.query.trim().split(/\s+/).filter((t) => t.length >= 2);
+    if (qTokens.length > 0) {
+      const pattern = qTokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+      const regex = new RegExp(`(${pattern})`, "gi");
       snippetEl.innerHTML = escapedSnippet.replace(regex, "<mark>$1</mark>");
     } else {
       snippetEl.textContent = chat._snippet;
@@ -1204,6 +1210,12 @@ function renderChats() {
       // and skip adding proper snippets/scores to them from the semantic results.
       const titleOnlyChats = [...allChats];
 
+      const findChat = (sid) => {
+        if (state.chats[sid]) return state.chats[sid];
+        const chatId = sid.includes(':') ? sid.split(':')[1] : sid;
+        return Object.values(state.chats || {}).find((c) => c.chatId === chatId);
+      };
+
       // Run semantic or hybrid search asynchronously
       window
         .generateEmbedding(queryRaw, apiKey)
@@ -1222,8 +1234,11 @@ function renderChats() {
           if (state.searchMode === "semantic") {
             // Pure semantic: only show semantic matches, sorted by score
             for (const res of results) {
-              const chatObj = state.chats[res.storageId];
-              if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
+              const chatObj = findChat(res.storageId);
+              if (chatObj) {
+                if (state.activeAccountId !== "all" && chatObj.accountId !== state.activeAccountId) continue;
+                finalChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
+              }
             }
             // Sort by semantic relevance score descending
             finalChats.sort((a, b) => (b._score || 0) - (a._score || 0));
@@ -1234,7 +1249,12 @@ function renderChats() {
             // the titleMatchIds set and suppress proper hybrid scoring.
             const titleMatchIds = new Set(titleOnlyChats.map((c) => c.storageId));
             // Build a score-lookup for hybrid results so we can sort by relevance
-            const scoreMap = new Map(results.map((r) => [r.storageId, { score: r.score, snippet: r.snippet }]));
+            const scoreMap = new Map();
+            for (const r of results) {
+              const chatObj = findChat(r.storageId);
+              const sid = chatObj ? chatObj.storageId : r.storageId;
+              scoreMap.set(sid, { score: r.score, snippet: r.snippet });
+            }
 
             // Start from title matches, inject hybrid snippet+score where available
             for (const chat of titleOnlyChats) {
@@ -1246,9 +1266,13 @@ function renderChats() {
             }
             // Add content-only matches (not in title list) from hybrid results
             for (const res of results) {
-              if (!titleMatchIds.has(res.storageId)) {
-                const chatObj = state.chats[res.storageId];
-                if (chatObj) finalChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
+              const chatObj = findChat(res.storageId);
+              if (chatObj) {
+                if (state.activeAccountId !== "all" && chatObj.accountId !== state.activeAccountId) continue;
+                if (!titleMatchIds.has(chatObj.storageId)) {
+                  titleMatchIds.add(chatObj.storageId);
+                  finalChats.push({ ...chatObj, _snippet: res.snippet, _score: res.score });
+                }
               }
             }
             // Sort by hybrid relevance score descending (most relevant first)
@@ -1267,20 +1291,28 @@ function renderChats() {
     }
 
     if (state.searchMode !== "semantic") {
+      const findChat = (sid) => {
+        if (state.chats[sid]) return state.chats[sid];
+        const chatId = sid.includes(':') ? sid.split(':')[1] : sid;
+        return Object.values(state.chats || {}).find((c) => c.chatId === chatId);
+      };
+
       // Keyword baseline (run synchronously, sorted by BM25 score)
-      const contentResults = window.searchContent(searchIndexHandle, queryRaw);
+      const contentResults = window.searchContent(searchIndexHandle, queryRaw, state.activeAccountId);
       const titleMatchIds = new Set(allChats.map((c) => c.storageId));
 
       for (const res of contentResults) {
-        if (!titleMatchIds.has(res.storageId)) {
-          const chatObj = state.chats[res.storageId];
-          if (chatObj) {
-            // _score is used for relevance sorting in the initial keyword render
-            const cloned = { ...chatObj, _snippet: res.snippet, _score: res.score };
-            allChats.push(cloned);
-          }
+        const chatObj = findChat(res.storageId);
+        if (!chatObj) continue;
+        if (state.activeAccountId !== "all" && chatObj.accountId !== state.activeAccountId) continue;
+
+        if (!titleMatchIds.has(chatObj.storageId)) {
+          titleMatchIds.add(chatObj.storageId);
+          // _score is used for relevance sorting in the initial keyword render
+          const cloned = { ...chatObj, _snippet: res.snippet, _score: res.score };
+          allChats.push(cloned);
         } else {
-          const idx = allChats.findIndex((c) => c.storageId === res.storageId);
+          const idx = allChats.findIndex((c) => c.storageId === chatObj.storageId);
           if (idx !== -1) {
             allChats[idx] = { ...allChats[idx], _snippet: res.snippet, _score: res.score };
           }

@@ -105,6 +105,7 @@ function getMiniSearchOptions(query: string): Record<string, any> {
 export function searchContent(
   index: any,
   query: string,
+  accountId?: string,
 ): Array<{
   storageId: string;
   accountId: string;
@@ -117,7 +118,11 @@ export function searchContent(
   }
 
   const opts = getMiniSearchOptions(query);
-  const results = index.search(query, opts);
+  let results = index.search(query, opts);
+
+  if (accountId && accountId !== 'all') {
+    results = results.filter((r: any) => r.accountId === accountId);
+  }
 
   return results.map((result: any) => ({
     storageId: result.storageId as string,
@@ -187,7 +192,7 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
  *
  * Graceful degradation: if queryEmbedding is null/undefined, returns keyword results unchanged.
  *
- * @param accountId  When provided, only embeddings for this account are loaded.
+ * @param accountId  When provided (and not 'all'), only embeddings for this account are loaded.
  *   Prevents semantic results from one account from appearing when searching another.
  */
 export async function searchContentHybrid(
@@ -210,8 +215,8 @@ export async function searchContentHybrid(
     .filter((w) => w.length > 0)
     .map((w) => w.toLowerCase());
 
-  // 1. Always run keyword search
-  const keywordResults = searchContent(index, query);
+  // 1. Always run keyword search (account-scoped if specified)
+  const keywordResults = searchContent(index, query, accountId);
 
   // 2. No embedding or text mode -> pure keyword fallback (graceful degradation)
   if (searchMode === 'text' || !queryEmbedding || queryEmbedding.length === 0) {
@@ -226,14 +231,17 @@ export async function searchContentHybrid(
     normalizedKeywordMap.set(r.storageId, r.score / maxKeywordScore);
   }
 
-  // 4. Load embeddings scoped to the active account (prevents cross-account contamination)
-  //    and compute cosine similarity for each.
-  const getEmbeds = accountId
+  // 4. Load embeddings: scoped to active account if specified, otherwise load all
+  const hasSpecificAccount = Boolean(accountId && accountId !== 'all');
+  const getEmbeds = hasSpecificAccount
     ? (window as any).getAllEmbeddingsForAccount(accountId)
     : (window as any).getAllEmbeddings();
-  const embeddings = await getEmbeds as Record<string, number[]>;
+  const embeddings = (await getEmbeds) as Record<string, number[]>;
   const semanticScoreMap = new Map<string, number>();
   for (const [storageId, vec] of Object.entries(embeddings)) {
+    if (hasSpecificAccount && !storageId.startsWith(`${accountId}:`)) {
+      continue;
+    }
     semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
   }
 

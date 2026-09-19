@@ -78,6 +78,9 @@ export async function getAllEmbeddings(): Promise<Record<string, number[]>> {
  * similarity in hybrid search cannot return results from other accounts.
  */
 export async function getAllEmbeddingsForAccount(accountId: string): Promise<Record<string, number[]>> {
+  if (!accountId || accountId === 'all') {
+    return getAllEmbeddings();
+  }
   const accountKey = `${EMBEDDING_KEY_PREFIX}${accountId}`;
   return new Promise((resolve) => {
     chrome.storage.local.get([accountKey, LEGACY_EMBEDDING_KEY], (items) => {
@@ -141,6 +144,10 @@ export async function getChatContent(storageId: string): Promise<ChatContentReco
 }
 
 export async function getAllChatContentForAccount(accountId: string): Promise<ChatContentRecord[]> {
+  if (!accountId || accountId === 'all') {
+    const all = await getAllIndexedEntries();
+    return Object.values(all);
+  }
   const accountKey = `${STORAGE_KEY_PREFIX}${accountId}`;
   return new Promise((resolve) => {
     chrome.storage.local.get([accountKey, LEGACY_STORAGE_KEY], (result) => {
@@ -234,6 +241,8 @@ export async function deleteEmbeddingsForAccount(accountId: string): Promise<voi
 /**
  * Remove searchIndex and embeddingIndex entries whose storageId is not in the
  * provided set of valid storageIds (i.e. chats still tracked in sync storage).
+ * If an entry has a legacy account prefix but its chatId matches an existing chat,
+ * the entry is migrated to the canonical modern storageId rather than destroyed.
  */
 export async function pruneOrphanedIndexEntries(
   validStorageIds: Set<string>,
@@ -250,16 +259,52 @@ export async function pruneOrphanedIndexEntries(
 
       const updates: Record<string, any> = {};
 
+      // Reverse lookup: chatId -> canonical valid storageId
+      const chatIdToValidStorageId = new Map<string, string>();
+      for (const sid of validStorageIds) {
+        const parts = sid.split(':');
+        if (parts.length > 1) {
+          chatIdToValidStorageId.set(parts[1], sid);
+        }
+      }
+
       // Text indexes
       for (const [key, value] of Object.entries(items)) {
         if ((key.startsWith(STORAGE_KEY_PREFIX) || key === LEGACY_STORAGE_KEY) && typeof value === 'object') {
           const index = value as Record<string, ChatContentRecord>;
-          const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
-          if (staleKeys.length > 0) {
-            const newIndex = { ...index };
-            for (const k of staleKeys) delete newIndex[k];
+          let changed = false;
+          const newIndex = { ...index };
+
+          for (const [k, record] of Object.entries(index)) {
+            if (validStorageIds.has(k)) {
+              continue;
+            }
+            const chatId = k.includes(':') ? k.split(':')[1] : (record as any)?.chatId || k;
+            const canonicalSid = chatIdToValidStorageId.get(chatId);
+
+            if (canonicalSid) {
+              // Re-key and migrate to canonical account
+              const newAcctId = canonicalSid.split(':')[0];
+              const targetKey = `${STORAGE_KEY_PREFIX}${newAcctId}`;
+              if (!updates[targetKey]) {
+                updates[targetKey] = { ...((items[targetKey] as Record<string, ChatContentRecord>) || {}) };
+              }
+              updates[targetKey][canonicalSid] = {
+                ...record,
+                storageId: canonicalSid,
+                accountId: newAcctId,
+              };
+              delete newIndex[k];
+              changed = true;
+            } else {
+              delete newIndex[k];
+              changed = true;
+              prunedText++;
+            }
+          }
+
+          if (changed) {
             updates[key] = newIndex;
-            prunedText += staleKeys.length;
           }
         }
       }
@@ -268,12 +313,35 @@ export async function pruneOrphanedIndexEntries(
       for (const [key, value] of Object.entries(items)) {
         if ((key.startsWith(EMBEDDING_KEY_PREFIX) || key === LEGACY_EMBEDDING_KEY) && typeof value === 'object') {
           const index = value as Record<string, number[]>;
-          const staleKeys = Object.keys(index).filter((k) => !validStorageIds.has(k));
-          if (staleKeys.length > 0) {
-            const newIndex = { ...index };
-            for (const k of staleKeys) delete newIndex[k];
+          let changed = false;
+          const newIndex = { ...index };
+
+          for (const [k, vector] of Object.entries(index)) {
+            if (validStorageIds.has(k)) {
+              continue;
+            }
+            const chatId = k.includes(':') ? k.split(':')[1] : k;
+            const canonicalSid = chatIdToValidStorageId.get(chatId);
+
+            if (canonicalSid) {
+              // Re-key and migrate to canonical account
+              const newAcctId = canonicalSid.split(':')[0];
+              const targetKey = `${EMBEDDING_KEY_PREFIX}${newAcctId}`;
+              if (!updates[targetKey]) {
+                updates[targetKey] = { ...((items[targetKey] as Record<string, number[]>) || {}) };
+              }
+              updates[targetKey][canonicalSid] = vector;
+              delete newIndex[k];
+              changed = true;
+            } else {
+              delete newIndex[k];
+              changed = true;
+              prunedEmbeddings++;
+            }
+          }
+
+          if (changed) {
             updates[key] = newIndex;
-            prunedEmbeddings += staleKeys.length;
           }
         }
       }

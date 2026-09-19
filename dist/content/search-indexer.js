@@ -11,9 +11,16 @@
     }
   }
   function extractTextFromMessage(message) {
-    if (message.text) return message.text;
-    if (!Array.isArray(message.content)) return "";
-    return message.content.filter((block) => block.type === "text").map((block) => block.text || "").join("\n");
+    if (typeof message.text === "string" && message.text) {
+      return message.text;
+    }
+    if (typeof message.content === "string" && message.content) {
+      return message.content;
+    }
+    if (Array.isArray(message.content)) {
+      return message.content.filter((block) => block.type === "text" || typeof block.text === "string").map((block) => block.text || "").join("\n");
+    }
+    return "";
   }
   async function fetchChatContent(orgId, chatId) {
     cctLog(`Fetching chat content for ${chatId}...`);
@@ -144,6 +151,17 @@
       if (state.status !== "running" && state.status !== "paused-tab-hidden" && state.status !== "paused-ratelimited") {
         return;
       }
+      if (!this.semanticApiKey && window.getSemanticSettings) {
+        try {
+          const settings = await window.getSemanticSettings();
+          if (settings && settings.enabled && settings.apiKey) {
+            this.semanticEnabled = true;
+            this.semanticApiKey = settings.apiKey;
+            this.embeddingError = null;
+          }
+        } catch (_) {
+        }
+      }
       state.status = "running";
       await this.saveState(state);
       this._scheduleNext(0);
@@ -164,6 +182,17 @@
           state.status = "paused-tab-hidden";
           await this.saveState(state);
           return;
+        }
+        if (!this.semanticApiKey && window.getSemanticSettings) {
+          try {
+            const settings = await window.getSemanticSettings();
+            if (settings && settings.enabled && settings.apiKey) {
+              this.semanticEnabled = true;
+              this.semanticApiKey = settings.apiKey;
+              this.embeddingError = null;
+            }
+          } catch (_) {
+          }
         }
         if (state.pendingChatIds.length === 0) {
           cctLog(`Queue complete!`);
@@ -201,13 +230,18 @@
               cctWarn("putChatContent not available on window");
             }
             state.doneChatIds.push(chatId);
-            if (this.semanticEnabled && this.semanticApiKey && !this.embeddingError && generateEmbedding && putEmbedding) {
+            if (this.semanticEnabled && this.semanticApiKey && this.embeddingError !== "invalid-key" && generateEmbedding && putEmbedding) {
               try {
-                const embedText = (content.firstMessage + " " + content.lastMessage).slice(0, 2e3);
-                cctLog(`Generating embedding for ${chatId}...`);
-                const vector = await generateEmbedding(embedText, this.semanticApiKey);
-                await putEmbedding(storageId, vector);
-                cctLog(`Embedding stored for ${chatId}`);
+                const embedText = (content.firstMessage + " " + content.lastMessage).trim().slice(0, 2e3);
+                if (embedText.length > 0) {
+                  cctLog(`Generating embedding for ${chatId}...`);
+                  const vector = await generateEmbedding(embedText, this.semanticApiKey);
+                  if (vector && vector.length > 0) {
+                    await putEmbedding(storageId, vector);
+                    cctLog(`Embedding stored for ${chatId}`);
+                    this.embeddingError = null;
+                  }
+                }
               } catch (embErr) {
                 const msg = embErr instanceof Error ? embErr.message : String(embErr);
                 if (msg === "INVALID_KEY") {
@@ -215,9 +249,14 @@
                   this.embeddingError = "invalid-key";
                   state.embeddingError = "invalid-key";
                 } else if (msg === "RATE_LIMITED") {
-                  cctWarn("Gemini rate limit hit \u2014 embedding skipped for this chat, continuing");
-                  this.embeddingError = "rate-limited";
-                  state.embeddingError = "rate-limited";
+                  cctWarn("Gemini rate limit hit \u2014 backing off for 15s before next attempt");
+                  state.pendingChatIds.unshift(chatId);
+                  state.doneChatIds.pop();
+                  state.status = "paused-ratelimited";
+                  state.pausedAt = Date.now();
+                  await this.saveState(state);
+                  this._scheduleNext(15e3);
+                  return;
                 } else {
                   cctWarn(`Embedding failed for ${chatId}:`, embErr);
                 }
@@ -270,11 +309,12 @@
       }
     }
     const expectedAccountId = `acc_org_${orgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
-    if (accountId !== expectedAccountId) {
+    const isMatch = accountId === expectedAccountId || accountId === "all" || !accountId.startsWith("acc_org_");
+    if (!isMatch) {
       cctWarn(`Account mismatch: requested ${accountId} but active tab is ${expectedAccountId}`);
-      alert("Account mismatch:\nYou are currently logged in to a different account on this Claude tab. Please switch to this account in Claude before scanning.");
       return;
     }
+    const targetAccountId = expectedAccountId;
     if (!internalBridge.fetchRecentChats) {
       cctWarn(`fetchRecentChats not available on bridge`);
       return;
@@ -286,7 +326,7 @@
     }
     let indexedRecords = [];
     if (window.getAllChatContentForAccount) {
-      indexedRecords = await window.getAllChatContentForAccount(accountId);
+      indexedRecords = await window.getAllChatContentForAccount(targetAccountId);
     }
     const indexedMap = /* @__PURE__ */ new Map();
     for (const record of indexedRecords) {
@@ -299,7 +339,7 @@
       const serverTime = chat.updatedAt ?? 0;
       updatedAtMap[chat.chatId] = serverTime;
       const existing = indexedMap.get(chat.chatId);
-      const storageId = `${accountId}:${chat.chatId}`;
+      const storageId = `${targetAccountId}:${chat.chatId}`;
       const needsEmbedding = apiKey && !existingEmbeddings[storageId];
       const isUpToDate = existing && existing.serverUpdatedAt > 0 && existing.serverUpdatedAt === serverTime;
       if (isUpToDate && !needsEmbedding) {
@@ -308,7 +348,7 @@
       chatIdsToProcess.push(chat.chatId);
     }
     cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-    await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
+    await queue.start(targetAccountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
   }
   async function waitForBridge() {
     const timeoutMs = 3e4;

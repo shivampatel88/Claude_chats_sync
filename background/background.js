@@ -257,6 +257,62 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  // GENERATE_EMBEDDING: execute Gemini embedding fetch in privileged background context (bypasses content-script CORS)
+  if (message.type === "GENERATE_EMBEDDING") {
+    const { text, apiKey } = message;
+    (async () => {
+      if (!text || !text.trim()) {
+        sendResponse({ ok: true, values: [] });
+        return;
+      }
+      if (!apiKey) {
+        sendResponse({ ok: false, error: "INVALID_KEY" });
+        return;
+      }
+      try {
+        const truncated = text.length > 2000 ? text.slice(0, 2000) : text;
+        const res = await fetch(
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+            body: JSON.stringify({
+              model: "models/gemini-embedding-001",
+              content: { parts: [{ text: truncated }] },
+              outputDimensionality: 768,
+            }),
+          }
+        );
+
+        if (res.status === 401 || res.status === 403) {
+          sendResponse({ ok: false, error: "INVALID_KEY" });
+          return;
+        }
+        if (res.status === 429) {
+          sendResponse({ ok: false, error: "RATE_LIMITED" });
+          return;
+        }
+        if (!res.ok) {
+          const errBody = await res.text().catch(() => "");
+          bgWarn("Gemini API error:", res.status, errBody);
+          sendResponse({ ok: false, error: `Gemini API error: ${res.status}` });
+          return;
+        }
+
+        const data = await res.json();
+        const values = data && data.embedding && data.embedding.values ? data.embedding.values : [];
+        sendResponse({ ok: true, values });
+      } catch (fetchErr) {
+        bgWarn("GENERATE_EMBEDDING fetch exception:", fetchErr);
+        sendResponse({ ok: false, error: fetchErr && fetchErr.message ? fetchErr.message : String(fetchErr) });
+      }
+    })();
+    return true;
+  }
+
   if (message.type !== "SYNC_DATA") return false;
   bgLog(`🔄 SYNC_DATA queued (queue depth: ${syncQueue.length + 1})`);
   syncQueue.push({

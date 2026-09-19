@@ -78,12 +78,19 @@ interface ChatMessage {
 }
 
 function extractTextFromMessage(message: ChatMessage): string {
-  if (message.text) return message.text;
-  if (!Array.isArray(message.content)) return '';
-  return message.content
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text || '')
-    .join('\n');
+  if (typeof (message as any).text === 'string' && (message as any).text) {
+    return (message as any).text;
+  }
+  if (typeof (message as any).content === 'string' && (message as any).content) {
+    return (message as any).content;
+  }
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((block) => block.type === 'text' || typeof block.text === 'string')
+      .map((block) => block.text || '')
+      .join('\n');
+  }
+  return '';
 }
 
 // ─── 2. fetchChatContent ─────────────────────────────────────────────
@@ -258,6 +265,18 @@ export class IndexingQueue {
       return;
     }
 
+    // Phase B: actively restore semantic settings on resume if not yet in memory
+    if (!this.semanticApiKey && window.getSemanticSettings) {
+      try {
+        const settings = await window.getSemanticSettings();
+        if (settings && settings.enabled && settings.apiKey) {
+          this.semanticEnabled = true;
+          this.semanticApiKey = settings.apiKey;
+          this.embeddingError = null;
+        }
+      } catch (_) {}
+    }
+
     state.status = 'running';
     await this.saveState(state);
     this._scheduleNext(0);
@@ -281,6 +300,18 @@ export class IndexingQueue {
         state.status = 'paused-tab-hidden';
         await this.saveState(state);
         return;
+      }
+
+      // Ensure semantic settings are active if available
+      if (!this.semanticApiKey && window.getSemanticSettings) {
+        try {
+          const settings = await window.getSemanticSettings();
+          if (settings && settings.enabled && settings.apiKey) {
+            this.semanticEnabled = true;
+            this.semanticApiKey = settings.apiKey;
+            this.embeddingError = null;
+          }
+        } catch (_) {}
       }
 
       if (state.pendingChatIds.length === 0) {
@@ -335,17 +366,22 @@ export class IndexingQueue {
           if (
             this.semanticEnabled &&
             this.semanticApiKey &&
-            !this.embeddingError &&
+            this.embeddingError !== 'invalid-key' &&
             generateEmbedding &&
             putEmbedding
           ) {
             try {
               // Concatenate first + last message, capped at 2000 chars total
-              const embedText = (content.firstMessage + ' ' + content.lastMessage).slice(0, 2000);
-              cctLog(`Generating embedding for ${chatId}...`);
-              const vector = await generateEmbedding(embedText, this.semanticApiKey);
-              await putEmbedding(storageId, vector);
-              cctLog(`Embedding stored for ${chatId}`);
+              const embedText = (content.firstMessage + ' ' + content.lastMessage).trim().slice(0, 2000);
+              if (embedText.length > 0) {
+                cctLog(`Generating embedding for ${chatId}...`);
+                const vector = await generateEmbedding(embedText, this.semanticApiKey);
+                if (vector && vector.length > 0) {
+                  await putEmbedding(storageId, vector);
+                  cctLog(`Embedding stored for ${chatId}`);
+                  this.embeddingError = null;
+                }
+              }
             } catch (embErr: unknown) {
               const msg = embErr instanceof Error ? embErr.message : String(embErr);
               if (msg === 'INVALID_KEY') {
@@ -354,10 +390,15 @@ export class IndexingQueue {
                 // Persist the error so the popup can reflect it on next status poll
                 state.embeddingError = 'invalid-key';
               } else if (msg === 'RATE_LIMITED') {
-                cctWarn('Gemini rate limit hit — embedding skipped for this chat, continuing');
-                // Don't fail the whole queue; just skip embeddings temporarily
-                this.embeddingError = 'rate-limited';
-                state.embeddingError = 'rate-limited';
+                cctWarn('Gemini rate limit hit — backing off for 15s before next attempt');
+                // Requeue current chat so it gets an embedding when rate limit lifts
+                state.pendingChatIds.unshift(chatId);
+                state.doneChatIds.pop();
+                state.status = 'paused-ratelimited';
+                state.pausedAt = Date.now();
+                await this.saveState(state);
+                this._scheduleNext(15000);
+                return;
               } else {
                 cctWarn(`Embedding failed for ${chatId}:`, embErr);
                 // Non-fatal: content is already indexed; embedding is best-effort
@@ -424,13 +465,14 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
   }
 
   // Safety guard: ensure the active tab's logged-in account matches the account requested.
-  // This prevents writing the active session's chats into a background account's index.
+  // Supports legacy IDs that migrate to expectedAccountId.
   const expectedAccountId = `acc_org_${orgId.replace(/[^a-z0-9]/gi, '').slice(0, 16)}`;
-  if (accountId !== expectedAccountId) {
+  const isMatch = accountId === expectedAccountId || accountId === 'all' || !accountId.startsWith('acc_org_');
+  if (!isMatch) {
     cctWarn(`Account mismatch: requested ${accountId} but active tab is ${expectedAccountId}`);
-    alert("Account mismatch:\nYou are currently logged in to a different account on this Claude tab. Please switch to this account in Claude before scanning.");
     return;
   }
+  const targetAccountId = expectedAccountId;
 
   if (!internalBridge.fetchRecentChats) {
     cctWarn(`fetchRecentChats not available on bridge`);
@@ -445,7 +487,7 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
 
   let indexedRecords: ChatContentRecord[] = [];
   if (window.getAllChatContentForAccount) {
-    indexedRecords = await window.getAllChatContentForAccount(accountId);
+    indexedRecords = await window.getAllChatContentForAccount(targetAccountId);
   }
 
   const indexedMap = new Map<string, ChatContentRecord>();
@@ -466,7 +508,7 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
     const serverTime = chat.updatedAt ?? 0;
     updatedAtMap[chat.chatId] = serverTime;
     const existing = indexedMap.get(chat.chatId);
-    const storageId = `${accountId}:${chat.chatId}`;
+    const storageId = `${targetAccountId}:${chat.chatId}`;
     const needsEmbedding = apiKey && !existingEmbeddings[storageId];
     const isUpToDate = existing && existing.serverUpdatedAt > 0 && existing.serverUpdatedAt === serverTime;
     if (isUpToDate && !needsEmbedding) {
@@ -477,7 +519,7 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
   }
 
   cctLog(`${chatIdsToProcess.length} chats need indexing out of ${recentChats.length}`);
-  await queue.start(accountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
+  await queue.start(targetAccountId, orgId, chatIdsToProcess, updatedAtMap, apiKey);
 }
 
 // ─── 5. waitForBridge ────────────────────────────────────────────────

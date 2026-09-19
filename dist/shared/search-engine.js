@@ -57,12 +57,15 @@
       combineWith: "AND"
     };
   }
-  function searchContent(index, query) {
+  function searchContent(index, query, accountId) {
     if (index === null || index === void 0 || !query.trim()) {
       return [];
     }
     const opts = getMiniSearchOptions(query);
-    const results = index.search(query, opts);
+    let results = index.search(query, opts);
+    if (accountId && accountId !== "all") {
+      results = results.filter((r) => r.accountId === accountId);
+    }
     return results.map((result) => ({
       storageId: result.storageId,
       accountId: result.accountId,
@@ -91,7 +94,7 @@
   }
   async function searchContentHybrid(index, query, queryEmbedding, searchMode = "hybrid", accountId) {
     const queryWords = query.trim().split(/\s+/).filter((w) => w.length > 0).map((w) => w.toLowerCase());
-    const keywordResults = searchContent(index, query);
+    const keywordResults = searchContent(index, query, accountId);
     if (searchMode === "text" || !queryEmbedding || queryEmbedding.length === 0) {
       return keywordResults;
     }
@@ -101,10 +104,14 @@
     for (const r of keywordResults) {
       normalizedKeywordMap.set(r.storageId, r.score / maxKeywordScore);
     }
-    const getEmbeds = accountId ? window.getAllEmbeddingsForAccount(accountId) : window.getAllEmbeddings();
+    const hasSpecificAccount = Boolean(accountId && accountId !== "all");
+    const getEmbeds = hasSpecificAccount ? window.getAllEmbeddingsForAccount(accountId) : window.getAllEmbeddings();
     const embeddings = await getEmbeds;
     const semanticScoreMap = /* @__PURE__ */ new Map();
     for (const [storageId, vec] of Object.entries(embeddings)) {
+      if (hasSpecificAccount && !storageId.startsWith(`${accountId}:`)) {
+        continue;
+      }
       semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
     }
     const entries = semanticScoreMap.size > 0 ? await window.getAllIndexedEntries() : {};

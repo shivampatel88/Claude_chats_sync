@@ -58,6 +58,7 @@
   const MIGRATION_DOUBLED_TITLES_V2 = "migration_doubledTitles_v2";
   // V1: migrate flat legacy searchIndex / embeddingIndex keys to per-account keys.
   const MIGRATION_LEGACY_SEARCH_V1 = "migration_legacySearch_v1";
+  const MIGRATION_LEGACY_ACCOUNTS_V1 = "migration_legacyAccounts_v1";
 
   // API-based timestamp sync: fetch real conversation updatedAt from Claude's internal API.
   const API_SYNC_INTERVAL_MS = 60 * 1000; // at most once per 60 s
@@ -717,26 +718,10 @@
   // Fix A: cookieDetectedEmail is checked before display-name fallback so the real identity
   //        is used from the very first scrape, even before the user opens the account menu.
   function detectAccountIdentity() {
-    const email = detectAccountEmail();
-    if (email) {
-      // Fix F (sticky): pin the email into cookieDetectedEmail the first time DOM exposes it.
-      // This ensures subsequent scrapes use the real identity even after the toggle closes.
-      if (!cookieDetectedEmail) {
-        cookieDetectedEmail = email;
-        cctLog("🔒 DOM email pinned for session:", email);
-      }
-      return {
-        email,
-        displayName: accountLabelFromEmail(email),
-      };
-    }
-
-    // Fix A: cookie-extracted email — available immediately at page load without UI interaction.
-    if (cookieDetectedEmail) {
-      return {
-        email: cookieDetectedEmail,
-        displayName: accountLabelFromEmail(cookieDetectedEmail),
-      };
+    const email = detectAccountEmail() || cookieDetectedEmail || null;
+    if (email && !cookieDetectedEmail) {
+      cookieDetectedEmail = email;
+      cctLog("🔒 DOM email pinned for session:", email);
     }
 
     // Pass 1: specific high-confidence selectors (most reliable)
@@ -753,7 +738,7 @@
       );
       for (const el of elements) {
         const displayName = findDisplayNameInElement(el);
-        if (displayName) return { email: null, displayName };
+        if (displayName) return { email, displayName };
       }
     }
 
@@ -769,12 +754,12 @@
 
     for (const element of broadCandidates) {
       const displayName = findDisplayNameInElement(element);
-      if (displayName) return { email: null, displayName };
+      if (displayName) return { email, displayName };
     }
 
     return {
-      email: null,
-      displayName: FALLBACK_ACCOUNT_NAME,
+      email,
+      displayName: email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME,
     };
   }
 
@@ -788,10 +773,11 @@
     if (!cachedOrgId) return null; // defensive: should never happen after initProfileLocalId
 
     const accountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
-    const email = (accountIdentity && accountIdentity.email) || null;
+    const email = (accountIdentity && accountIdentity.email) || cookieDetectedEmail || null;
     const displayName =
-      (accountIdentity && accountIdentity.displayName) ||
-      (email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME);
+      (accountIdentity && accountIdentity.displayName && accountIdentity.displayName !== FALLBACK_ACCOUNT_NAME)
+        ? accountIdentity.displayName
+        : (email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME);
 
     return { accountId, email, displayName };
   }
@@ -817,6 +803,53 @@
     }
   }
 
+  // One-time migration: purge legacy non-org account duplicate chats when modern
+  // acc_org_ entries exist for the same chatIds. Resolves 300+ chatId collision errors.
+  async function migrateLegacyAccounts() {
+    try {
+      const data = await storageGet([STORAGE_KEYS.accounts, STORAGE_KEYS.chats]);
+      const accounts = data[STORAGE_KEYS.accounts] || {};
+      const chats = data[STORAGE_KEYS.chats] || {};
+      let dirty = false;
+
+      // Find all modern org accounts
+      const orgAccounts = Object.keys(accounts).filter((id) => id.startsWith("acc_org_"));
+      if (orgAccounts.length === 0) return;
+
+      // Map chatIds belonging to modern org accounts
+      const orgChatIds = new Set();
+      for (const chat of Object.values(chats)) {
+        if (chat && chat.accountId && chat.accountId.startsWith("acc_org_")) {
+          orgChatIds.add(chat.chatId);
+        }
+      }
+
+      // If a chat exists under a legacy non-org account, but its chatId is also under an org account, remove the legacy duplicate
+      for (const [sid, chat] of Object.entries(chats)) {
+        if (chat && chat.accountId && !chat.accountId.startsWith("acc_org_") && orgChatIds.has(chat.chatId)) {
+          delete chats[sid];
+          dirty = true;
+        }
+      }
+
+      // If a legacy account has 0 remaining chats, remove it from accounts
+      const remainingAccountIds = new Set(Object.values(chats).map((c) => c.accountId));
+      for (const acctId of Object.keys(accounts)) {
+        if (!acctId.startsWith("acc_org_") && !remainingAccountIds.has(acctId)) {
+          delete accounts[acctId];
+          dirty = true;
+        }
+      }
+
+      if (dirty) {
+        await storageSet({ [STORAGE_KEYS.accounts]: accounts, [STORAGE_KEYS.chats]: chats });
+        cctLog("✅ Migrated legacy accounts and purged pre-org duplicate chats.");
+      }
+    } catch (err) {
+      cctWarn("Migration legacy accounts error:", err);
+    }
+  }
+
   // init: fetch orgId (the single account discriminant) then seed email for display.
   // May be called more than once (e.g. after re-login via setupNavigationWatcher);
   // the initInProgress guard prevents concurrent runs.
@@ -832,6 +865,7 @@
         MIGRATION_DOUBLED_TITLES_V1,
         MIGRATION_DOUBLED_TITLES_V2,
         MIGRATION_LEGACY_SEARCH_V1,
+        MIGRATION_LEGACY_ACCOUNTS_V1,
       ]);
 
       // Fetch orgId first — this is the single source of truth for account identity.
@@ -896,6 +930,12 @@
         await window.migrateLegacyIndexToPerAccount();
         await storageSet({ [MIGRATION_LEGACY_SEARCH_V1]: true });
         cctLog("✅ Legacy search index migration V1 done");
+      }
+      if (!data[MIGRATION_LEGACY_ACCOUNTS_V1]) {
+        cctLog("🔧 Running legacy account cleanup migration V1…");
+        await migrateLegacyAccounts();
+        await storageSet({ [MIGRATION_LEGACY_ACCOUNTS_V1]: true });
+        cctLog("✅ Legacy account cleanup migration V1 done");
       }
     } catch (_error) {
       cctError("❌ Init failed:", _error);
@@ -1583,18 +1623,20 @@
 
     const existingAccount = accounts[accountId] || {};
     const displayName =
-      account.displayName ||
-      existingAccount.displayName ||
-      FALLBACK_ACCOUNT_NAME;
+      (existingAccount.autoDetectedName === false && existingAccount.displayName)
+        ? existingAccount.displayName
+        : (account.displayName && account.displayName !== FALLBACK_ACCOUNT_NAME)
+          ? account.displayName
+          : (existingAccount.displayName || FALLBACK_ACCOUNT_NAME);
 
     accounts[accountId] = {
       accountId,
-      email: account.email,
+      email: account.email || existingAccount.email || null,
       displayName,
       color: existingAccount.color || colorForAccount(accounts),
       firstSeen: existingAccount.firstSeen || now,
       lastSeen: now,
-      autoDetectedName: true,
+      autoDetectedName: existingAccount.autoDetectedName === false ? false : true,
     };
 
     for (const chat of chats) {
@@ -1618,6 +1660,13 @@
         // Preserve server-sourced timestamp — never overwrite with null from DOM scrape.
         serverUpdatedAt: existingChat.serverUpdatedAt || null,
       };
+
+      // Clean up legacy non-org entries for this chatId to prevent collision and duplication
+      for (const [sid, c] of Object.entries(existingChats)) {
+        if (sid !== storageId && c && c.chatId === chat.chatId && typeof c.accountId === "string" && !c.accountId.startsWith("acc_org_")) {
+          delete existingChats[sid];
+        }
+      }
     }
 
     // Phase 2: lastKnownEmail write removed. Email is stored on the account object
