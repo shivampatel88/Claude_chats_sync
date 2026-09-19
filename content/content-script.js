@@ -1979,10 +1979,16 @@
       lastPathname = current;
     }
 
-    // Intercept history.pushState (used by Claude's SPA router).
+    // Intercept history.pushState and history.replaceState (used by Claude's SPA router).
     const origPushState = history.pushState.bind(history);
     history.pushState = function (...args) {
       origPushState(...args);
+      onNavigate();
+    };
+
+    const origReplaceState = history.replaceState.bind(history);
+    history.replaceState = function (...args) {
+      origReplaceState(...args);
       onNavigate();
     };
 
