@@ -336,10 +336,12 @@ async function readSyncedData() {
   ]);
   const meta = header[SYNC_KEYS.meta] || {};
   const chunkCount = Number(meta.chatChunkCount || 0);
-  const chunkKeys = Array.from(
-    { length: chunkCount },
-    (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`,
-  );
+  const chunkKeys = [];
+  for (let i = 0; i < chunkCount; i++) {
+    chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}`);
+    chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}_a`);
+    chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}_b`);
+  }
   const chunkData = chunkKeys.length > 0 ? await syncGet(chunkKeys) : {};
   const chats = {};
 
@@ -1062,6 +1064,42 @@ function renderFilters() {
         li.appendChild(badge);
       }
 
+      // 1-Click Session Switch button for accounts with saved vault sessions
+      if (!isCur && hasVault) {
+        const switchBtn = document.createElement("button");
+        switchBtn.className = "acct-switch-btn";
+        switchBtn.title = `Switch active session to ${label}`;
+        switchBtn.textContent = "Switch";
+        switchBtn.onclick = async (e) => {
+          e.stopPropagation();
+          switchBtn.disabled = true;
+          switchBtn.textContent = "...";
+          try {
+            if (window.CctVault && window.CctVault.restoreSession) {
+              const res = await window.CctVault.restoreSession(accountId);
+              if (res && res.ok) {
+                state.currentAccountId = accountId;
+                await storageSet({ currentAccountId: accountId, pendingOpen: null });
+                const tabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
+                for (const tab of tabs) {
+                  chrome.tabs.reload(tab.id);
+                }
+                await reloadData();
+                render();
+              } else {
+                alert("Could not switch session: " + (res?.error || "Unknown error"));
+              }
+            }
+          } catch (switchErr) {
+            alert("Switch error: " + (switchErr && switchErr.message ? switchErr.message : String(switchErr)));
+          } finally {
+            switchBtn.disabled = false;
+            switchBtn.textContent = "Switch";
+          }
+        };
+        li.appendChild(switchBtn);
+      }
+
       // Quick background sync icon button for ready accounts
       if (hasVault || isCur) {
         const syncBtn = document.createElement("button");
@@ -1743,6 +1781,21 @@ async function reloadData() {
   state.chats = chats;
   const previousCurrentAccountId = state.currentAccountId;
   state.currentAccountId = local.currentAccountId || "";
+
+  // Reconcile currentAccountId with actual active browser cookies
+  if (chrome.cookies) {
+    try {
+      const orgCookie = await chrome.cookies.get({ url: "https://claude.ai", name: "lastActiveOrg" });
+      if (orgCookie && orgCookie.value) {
+        const canonicalActiveId = `acc_org_${orgCookie.value.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+        if (state.accounts[canonicalActiveId] && state.currentAccountId !== canonicalActiveId) {
+          state.currentAccountId = canonicalActiveId;
+          await storageSet({ currentAccountId: canonicalActiveId });
+        }
+      }
+    } catch (_) {}
+  }
+
   state.syncStatus = local.syncStatus || null;
 
   // Pivot active filter to the new current account if it was previously tracking the old current account
@@ -1810,13 +1863,9 @@ async function reloadData() {
     state.semanticSettings = await window.getSemanticSettings();
   }
 
-  // Session Vault: load session metadata for all accounts & passive capture for current account
+  // Session Vault: load session metadata for all accounts
   if (window.CctVault && window.CctVault.getAllSessionMetadata) {
     state.vaultMeta = (await window.CctVault.getAllSessionMetadata()) || {};
-    if (state.currentAccountId && window.CctVault.captureSession) {
-      const curAcct = state.accounts[state.currentAccountId] || {};
-      window.CctVault.captureSession(state.currentAccountId, curAcct.email).catch(() => {});
-    }
   } else {
     state.vaultMeta = {};
   }

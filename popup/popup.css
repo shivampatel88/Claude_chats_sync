@@ -1518,6 +1518,33 @@ input {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.acct-switch-btn {
+  display: none;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 4px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.acct-filter-menu li:hover .acct-switch-btn {
+  display: inline-flex;
+}
+
+.acct-switch-btn:hover {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 .index-status .index-btn.primary {
   background: var(--accent);
   border-color: rgba(255, 255, 255, 0.15);
