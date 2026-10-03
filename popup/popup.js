@@ -1359,12 +1359,12 @@ function createOpenIcon() {
 function createStarIcon(isStarred) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "13");
-  svg.setAttribute("height", "13");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
   svg.setAttribute("aria-hidden", "true");
   if (isStarred) {
-    svg.setAttribute("fill", "#E5A93C");
-    svg.setAttribute("stroke", "#E5A93C");
+    svg.setAttribute("fill", "#fbbf24");
+    svg.setAttribute("stroke", "#fbbf24");
   } else {
     svg.setAttribute("fill", "none");
     svg.setAttribute("stroke", "currentColor");
