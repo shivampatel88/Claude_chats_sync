@@ -63,6 +63,8 @@
   // API-based timestamp sync: fetch real conversation updatedAt from Claude's internal API.
   const API_SYNC_INTERVAL_MS = 60 * 1000; // at most once per 60 s
   let cachedOrgId = null; // cached so we don't re-fetch /api/organizations every time
+  let cachedOrgIdAt = 0; // timestamp when cachedOrgId was last resolved
+  const CACHED_ORG_TTL_MS = 60 * 1000; // 60 seconds TTL before re-verifying active org
   let lastApiSyncAt = 0; // epoch ms of last successful API call
   let lastFetchOrgIdAttemptAt = 0;
   const FETCH_ORG_COOLDOWN_MS = 10000; // 10 seconds cooldown between API requests when logged out
@@ -128,6 +130,7 @@
   // is how RC-1 class bugs are born.
   function resetSessionState() {
     cachedOrgId = null;
+    cachedOrgIdAt = 0;
     cookieDetectedEmail = null;
     lastSnapshot = "";
     lastApiSyncAt = 0;
@@ -679,6 +682,8 @@
     for (const line of lines) {
       const lower = line.toLowerCase();
       if (line.length > 36) continue;
+      // Filter out avatar initials (e.g. single letters like "S" or empty symbols)
+      if (line.length < 2) continue;
       if (blocked.includes(lower)) continue;
       if (
         blocked.some(
@@ -774,10 +779,17 @@
 
     const accountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
     const email = (accountIdentity && accountIdentity.email) || cookieDetectedEmail || null;
-    const displayName =
-      (accountIdentity && accountIdentity.displayName && accountIdentity.displayName !== FALLBACK_ACCOUNT_NAME)
+    const validDisplayName =
+      accountIdentity &&
+      accountIdentity.displayName &&
+      accountIdentity.displayName.length >= 2 &&
+      accountIdentity.displayName !== FALLBACK_ACCOUNT_NAME
         ? accountIdentity.displayName
-        : (email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME);
+        : null;
+
+    const displayName =
+      validDisplayName ||
+      (email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME);
 
     return { accountId, email, displayName };
   }
@@ -915,6 +927,11 @@
 
       if (cachedOrgId) {
         const activeAccountId = `acc_org_${cachedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+        
+        // Immediately persist currentAccountId to storage so the popup knows the active account
+        // without having to wait for a full DOM scrape
+        await storageSet({ [STORAGE_KEYS.currentAccountId]: activeAccountId });
+
         chrome.runtime.sendMessage({
           type: "VAULT_CAPTURE_SESSION",
           accountId: activeAccountId,
@@ -970,10 +987,12 @@
     ]);
     const meta = syncHeader[SYNC_KEYS.meta] || {};
     const chunkCount = Number(meta.chatChunkCount || 0);
-    const chunkKeys = Array.from(
-      { length: chunkCount },
-      (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`,
-    );
+    const chunkKeys = [];
+    for (let i = 0; i < chunkCount; i++) {
+      chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}`);
+      chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}_a`);
+      chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}_b`);
+    }
     const chunkData = chunkKeys.length > 0 ? await syncGet(chunkKeys) : {};
     const chats = {};
 
@@ -1077,7 +1096,9 @@
 
   // Step 1: get (and cache) the user's organisation UUID.
   async function fetchOrganizationId(bypassCache = false) {
-    if (cachedOrgId && !bypassCache) {
+    const now = Date.now();
+    const isFresh = cachedOrgId && (now - cachedOrgIdAt < CACHED_ORG_TTL_MS);
+    if (isFresh && !bypassCache) {
       cctLog("📡 Org ID (cached):", cachedOrgId);
       return cachedOrgId;
     }
@@ -1085,7 +1106,6 @@
       cctLog("📡 Login page — skipping org ID fetch.");
       return null;
     }
-    const now = Date.now();
     if (!bypassCache && now - lastFetchOrgIdAttemptAt < FETCH_ORG_COOLDOWN_MS) {
       return null;
     }
@@ -1102,6 +1122,7 @@
         cctWarn("📡 /api/organizations returned", res.status);
         if (res.status === 403 || res.status === 401) {
           cachedOrgId = null;
+          cachedOrgIdAt = 0;
         }
         return null;
       }
@@ -1110,6 +1131,7 @@
       const org = orgs.find((o) => !o.is_default_org) || orgs[0];
       if (org) {
         cachedOrgId = org.uuid || org.id || null;
+        cachedOrgIdAt = now;
         cctLog("📡 Org ID resolved:", cachedOrgId);
       }
     } catch (err) {
@@ -1982,13 +2004,9 @@
         // Navigated to /login → user just logged out.
         cctLog("🔓 Logout detected (URL:", lastPathname, "→", current, ") — resetting session state.");
         resetSessionState();
-      }
-
-      if (wasLogin && isNowLoggedIn) {
-        // Navigated away from /login → user just completed login.
-        cctLog("🔑 Login detected (URL:", lastPathname, "→", current, ") — re-initialising identity.");
-        // initProfileLocalId re-fetches orgId and sets isIdentityReady = true
-        // when done, which unblocks any polling runFullScrape calls.
+      } else if (current === "/" || current === "/new" || current === "/chats" || (wasLogin && isNowLoggedIn)) {
+        // Landing or root navigation — re-verify org identity in case user switched profiles
+        cachedOrgIdAt = 0; // invalidate cache TTL
         initProfileLocalId().then(() => scheduleScrape());
       }
 
@@ -2023,6 +2041,13 @@
     if (changes.rescrapeRequested && changes.rescrapeRequested.newValue) {
       lastSnapshot = ""; // reset snapshot so next scrape writes unconditionally
       scheduleScrape();
+    }
+    if (changes.currentAccountId && changes.currentAccountId.newValue) {
+      // Popup or background switched accounts: invalidate cached orgId and re-verify identity
+      cachedOrgId = null;
+      cachedOrgIdAt = 0;
+      lastSnapshot = "";
+      initProfileLocalId().then(() => scheduleScrape());
     }
   });
 
