@@ -136,6 +136,14 @@ let indexProgressPollTimer = null;
 // Phase B: debounce timer for API key saves
 let _semanticKeySaveTimer = null;
 
+let _initialStarredExpanded = false;
+try {
+  const _savedStarredExpanded = localStorage.getItem("cct_starred_expanded");
+  if (_savedStarredExpanded !== null) {
+    _initialStarredExpanded = _savedStarredExpanded === "true";
+  }
+} catch (_) {}
+
 let state = {
   accounts: {},
   chats: {},
@@ -146,6 +154,7 @@ let state = {
   query: "",
   deletedAccountIds: [], // BUG-03: tombstone IDs for accounts deleted locally but not yet confirmed in sync
   starredChatIds: new Set(), // storageId strings — starred chats always sort to top
+  starredExpanded: _initialStarredExpanded, // collapsible STARRED section: collapsed by default
   profileLocalId: "",
   allowedIndexingAccounts: [], // list of accountIds that have indexing enabled
   allAccountsIndexingEnabled: false, // global auto-index toggle
@@ -1735,8 +1744,53 @@ function _renderChatListItems(list, summary, allChats) {
   const normalChats = allChats.filter((c) => !state.starredChatIds.has(c.storageId));
 
   if (starredChats.length > 0) {
-    appendSectionHeader("Starred");
-    starredChats.forEach((chat) => list.appendChild(makeChatItem(chat)));
+    const isExpanded = !!state.starredExpanded;
+
+    const starredHeader = document.createElement("button");
+    starredHeader.type = "button";
+    starredHeader.className = "section-header section-header-collapsible";
+    starredHeader.setAttribute("aria-expanded", String(isExpanded));
+    starredHeader.setAttribute("aria-controls", "starredChatWrapper");
+    starredHeader.title = isExpanded ? "Collapse Starred chats" : "Expand Starred chats";
+
+    const titleSpan = document.createElement("span");
+    titleSpan.className = "section-header-title";
+    titleSpan.textContent = `Starred · ${starredChats.length}`;
+
+    const chevronSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chevronSvg.setAttribute("class", "section-chevron");
+    chevronSvg.setAttribute("viewBox", "0 0 24 24");
+    chevronSvg.setAttribute("aria-hidden", "true");
+    const chevronPolyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    chevronPolyline.setAttribute("points", "6 9 12 15 18 9");
+    chevronSvg.appendChild(chevronPolyline);
+
+    starredHeader.appendChild(titleSpan);
+    starredHeader.appendChild(chevronSvg);
+    list.appendChild(starredHeader);
+
+    const wrapper = document.createElement("div");
+    wrapper.id = "starredChatWrapper";
+    wrapper.className = `starred-collapsible-wrapper${isExpanded ? " is-expanded" : ""}`;
+
+    const inner = document.createElement("div");
+    inner.className = "starred-collapsible-inner";
+
+    starredChats.forEach((chat) => inner.appendChild(makeChatItem(chat)));
+    wrapper.appendChild(inner);
+    list.appendChild(wrapper);
+
+    starredHeader.addEventListener("click", () => {
+      const nextExpanded = !wrapper.classList.contains("is-expanded");
+      state.starredExpanded = nextExpanded;
+      wrapper.classList.toggle("is-expanded", nextExpanded);
+      starredHeader.setAttribute("aria-expanded", String(nextExpanded));
+      starredHeader.title = nextExpanded ? "Collapse Starred chats" : "Expand Starred chats";
+      try {
+        localStorage.setItem("cct_starred_expanded", String(nextExpanded));
+      } catch (_) {}
+      storageSet({ starredExpanded: nextExpanded }).catch(() => {});
+    });
   }
 
   let currentGroup = null;
@@ -1799,6 +1853,7 @@ async function reloadData() {
     STORAGE_KEYS.syncStatus,
     "deletedAccountIds", // BUG-03: load tombstones so mergeAccounts can filter them
     "starredChatIds", // restore per-profile starred chat pins
+    "starredExpanded", // restore collapsible starred state
     "profileLocalId",
     "allowedIndexingAccounts",
     "allAccountsIndexingEnabled",
@@ -1806,6 +1861,12 @@ async function reloadData() {
   ]);
   state.allowedIndexingAccounts = local.allowedIndexingAccounts || [];
   state.allAccountsIndexingEnabled = !!local.allAccountsIndexingEnabled;
+  if (local.starredExpanded !== undefined) {
+    state.starredExpanded = !!local.starredExpanded;
+    try {
+      localStorage.setItem("cct_starred_expanded", String(state.starredExpanded));
+    } catch (_) {}
+  }
   const synced = await readSyncedData();
   const deletedAccounts = synced.deletedAccounts || {};
 

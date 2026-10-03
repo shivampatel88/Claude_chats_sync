@@ -630,6 +630,83 @@ input {
   margin-top: 3px;
 }
 
+/* Collapsible Section Header (STARRED) */
+button.section-header-collapsible {
+  appearance: none;
+  -webkit-appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  outline: none;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+button.section-header-collapsible:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+button.section-header-collapsible:focus-visible {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.section-header-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.section-chevron {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  flex-shrink: 0;
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform: rotate(0deg);
+}
+
+button.section-header-collapsible[aria-expanded="true"] .section-chevron {
+  transform: rotate(180deg);
+}
+
+/* Starred Collapsible Wrapper — smooth 220ms curtain-style natural height reveal */
+.starred-collapsible-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms ease-out;
+}
+
+.starred-collapsible-wrapper.is-expanded {
+  grid-template-rows: 1fr;
+}
+
+.starred-collapsible-inner {
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 180ms ease-out, transform 220ms ease-out;
+}
+
+.starred-collapsible-wrapper.is-expanded .starred-collapsible-inner {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* Star button */
 .star-btn {
   display: grid;
