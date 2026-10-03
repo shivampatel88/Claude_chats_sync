@@ -266,9 +266,7 @@
                   this.embeddingError = "invalid-key";
                   state.embeddingError = "invalid-key";
                 } else if (msg === "RATE_LIMITED") {
-                  cctWarn("Gemini rate limit hit \u2014 backing off for 15s before next attempt");
-                  state.pendingChatIds.unshift(chatId);
-                  state.doneChatIds.pop();
+                  cctWarn("Gemini rate limit hit \u2014 backing off for 15s before continuing");
                   state.status = "paused-ratelimited";
                   state.pausedAt = Date.now();
                   state.rateLimitCooldownMs = 15e3;
@@ -339,12 +337,10 @@
       }
     }
     const expectedAccountId = `acc_org_${orgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
-    const isMatch = accountId === expectedAccountId || accountId === "all" || !accountId.startsWith("acc_org_");
-    if (!isMatch) {
-      cctWarn(`Account mismatch: requested ${accountId} but active tab is ${expectedAccountId}`);
-      return;
-    }
     const targetAccountId = expectedAccountId;
+    if (accountId !== "all" && accountId !== expectedAccountId) {
+      cctLog(`Re-targeting indexAccount from ${accountId} to active tab account ${targetAccountId}`);
+    }
     if (!internalBridge.fetchRecentChats) {
       cctWarn(`fetchRecentChats not available on bridge`);
       return;

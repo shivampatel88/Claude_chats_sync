@@ -412,10 +412,7 @@ export class IndexingQueue {
                 // Persist the error so the popup can reflect it on next status poll
                 state.embeddingError = 'invalid-key';
               } else if (msg === 'RATE_LIMITED') {
-                cctWarn('Gemini rate limit hit — backing off for 15s before next attempt');
-                // Requeue current chat so it gets an embedding when rate limit lifts
-                state.pendingChatIds.unshift(chatId);
-                state.doneChatIds.pop();
+                cctWarn('Gemini rate limit hit — backing off for 15s before continuing');
                 state.status = 'paused-ratelimited';
                 state.pausedAt = Date.now();
                 state.rateLimitCooldownMs = 15000;
@@ -500,15 +497,13 @@ export async function indexAccount(accountId: string, orgId: string, apiKey?: st
     }
   }
 
-  // Safety guard: ensure the active tab's logged-in account matches the account requested.
-  // Supports legacy IDs that migrate to expectedAccountId.
+  // Safety guard: determine canonical account ID for the active tab's organization.
   const expectedAccountId = `acc_org_${orgId.replace(/[^a-z0-9]/gi, '').slice(0, 16)}`;
-  const isMatch = accountId === expectedAccountId || accountId === 'all' || !accountId.startsWith('acc_org_');
-  if (!isMatch) {
-    cctWarn(`Account mismatch: requested ${accountId} but active tab is ${expectedAccountId}`);
-    return;
-  }
+  // Re-target to the active tab's account so indexing always proceeds for the logged-in session
   const targetAccountId = expectedAccountId;
+  if (accountId !== 'all' && accountId !== expectedAccountId) {
+    cctLog(`Re-targeting indexAccount from ${accountId} to active tab account ${targetAccountId}`);
+  }
 
   if (!internalBridge.fetchRecentChats) {
     cctWarn(`fetchRecentChats not available on bridge`);
