@@ -49,7 +49,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px 16px 11px;
+  padding: 10px 14px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   background: transparent;
 }
@@ -92,7 +92,7 @@ h1 {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--soft);
   font-size: 11px;
   font-weight: 450;
@@ -268,7 +268,7 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px 6px;
+  padding: 7px 14px 4px;
 }
 
 .search-container {
@@ -458,14 +458,14 @@ input {
   color: var(--soft);
   font-size: 11px;
   font-weight: 500;
-  padding: 2px 0 6px;
+  padding: 2px 0 4px;
 }
 
 .chat-list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 6px 16px;
+  padding: 2px 6px 14px;
   border-top: none;
 }
 .chat-list::-webkit-scrollbar {
@@ -614,9 +614,9 @@ input {
 
 /* Section divider headers in the chat list: lightweight, quiet, spaced */
 .section-header {
-  margin-top: 18px;
-  margin-bottom: 4px;
-  padding: 4px 10px 4px;
+  margin-top: 15px;
+  margin-bottom: 3px;
+  padding: 3px 10px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.07em;
@@ -624,6 +624,10 @@ input {
   color: #717888;
   user-select: none;
   border-bottom: none;
+}
+
+.section-header:first-child {
+  margin-top: 3px;
 }
 
 /* Star button */
@@ -653,14 +657,15 @@ input {
   transform: scale(1.15);
 }
 
-/* Starred items styling: quiet, seamless, warm ambient hint, NO heavy box */
+/* Starred items styling: open row matching general list, gold star as primary indication */
 .chat-item.is-starred {
-  background: rgba(251, 191, 36, 0.025);
+  background: transparent;
   border-color: transparent;
 }
 
-.chat-item.is-starred:hover {
-  background: rgba(251, 191, 36, 0.06);
+.chat-item.is-starred:hover,
+.chat-item.is-starred:focus {
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .chat-item.is-starred .star-btn {
