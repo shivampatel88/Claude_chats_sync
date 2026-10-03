@@ -787,9 +787,11 @@
         ? accountIdentity.displayName
         : null;
 
+    const emailHandle = email ? accountLabelFromEmail(email) : null;
     const displayName =
+      emailHandle ||
       validDisplayName ||
-      (email ? accountLabelFromEmail(email) : FALLBACK_ACCOUNT_NAME);
+      FALLBACK_ACCOUNT_NAME;
 
     return { accountId, email, displayName };
   }

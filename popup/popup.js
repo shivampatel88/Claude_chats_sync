@@ -247,7 +247,20 @@ function formatChatDate(timestamp) {
 }
 
 function shortAccountName(account) {
-  return account.displayName || account.email || "Unknown account";
+  if (!account) return "Unknown account";
+  if (account.autoDetectedName === false && account.displayName) {
+    return account.displayName;
+  }
+  const email =
+    account.email ||
+    (state &&
+      state.vaultMeta &&
+      state.vaultMeta[account.accountId] &&
+      state.vaultMeta[account.accountId].email);
+  if (email) {
+    return email.split("@")[0] || email;
+  }
+  return account.displayName || "Unknown account";
 }
 
 function currentAccountDisplay(account) {
@@ -1053,8 +1066,8 @@ function renderFilters() {
       } else if (hasVault) {
         const badge = document.createElement("span");
         badge.className = "acct-item-badge vault";
-        badge.textContent = "⚡ Vault";
-        badge.title = "Saved in vault: 1-click switch & background sync ready";
+        badge.textContent = "⚡";
+        badge.title = "Session saved in vault: switch & sync ready";
         li.appendChild(badge);
       } else if (vMeta && vMeta.expired) {
         const badge = document.createElement("span");
@@ -1064,16 +1077,21 @@ function renderFilters() {
         li.appendChild(badge);
       }
 
-      // 1-Click Session Switch button for accounts with saved vault sessions
+      // Actions container for hover icon buttons (Option 1)
+      const actions = document.createElement("div");
+      actions.className = "acct-item-actions";
+
+      // 1-Click Session Switch icon button (for vaulted non-active accounts)
       if (!isCur && hasVault) {
         const switchBtn = document.createElement("button");
-        switchBtn.className = "acct-switch-btn";
+        switchBtn.className = "acct-action-btn switch";
+        switchBtn.type = "button";
         switchBtn.title = `Switch active session to ${label}`;
-        switchBtn.textContent = "Switch";
+        switchBtn.setAttribute("aria-label", `Switch active session to ${label}`);
+        switchBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16V4m0 0L3 8m4-4l4 4m10 4v12m0 0l4-4m-4 4l-4-4"/></svg>`;
         switchBtn.onclick = async (e) => {
           e.stopPropagation();
           switchBtn.disabled = true;
-          switchBtn.textContent = "...";
           try {
             if (window.CctVault && window.CctVault.restoreSession) {
               const res = await window.CctVault.restoreSession(accountId);
@@ -1094,21 +1112,22 @@ function renderFilters() {
             alert("Switch error: " + (switchErr && switchErr.message ? switchErr.message : String(switchErr)));
           } finally {
             switchBtn.disabled = false;
-            switchBtn.textContent = "Switch";
           }
         };
-        li.appendChild(switchBtn);
+        actions.appendChild(switchBtn);
       }
 
-      // Quick background sync icon button for ready accounts
+      // Background sync icon button (for active or vaulted accounts)
       if (hasVault || isCur) {
         const syncBtn = document.createElement("button");
-        syncBtn.className = "acct-quick-sync-btn";
+        syncBtn.className = "acct-action-btn sync";
+        syncBtn.type = "button";
         syncBtn.title = `Sync chats from ${label} in background`;
-        syncBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-4.6a6 6 0 0 0-10 2M4 17h4.6a6 6 0 0 0 10-2M20 7l-3-3M20 7l-3 3M4 17l3 3M4 17l3-3"/></svg>`;
+        syncBtn.setAttribute("aria-label", `Sync chats from ${label} in background`);
+        syncBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-4.6a6 6 0 0 0-10 2M4 17h4.6a6 6 0 0 0 10-2M20 7l-3-3M20 7l-3 3M4 17l3 3M4 17l3-3"/></svg>`;
         syncBtn.onclick = async (e) => {
           e.stopPropagation();
-          syncBtn.style.opacity = "0.4";
+          syncBtn.disabled = true;
           try {
             const res = await chrome.runtime.sendMessage({
               type: "VAULT_SYNC_ACCOUNT",
@@ -1118,12 +1137,20 @@ function renderFilters() {
               await reloadData();
             } else if (res && res.expired) {
               alert("Session expired for this account. Please re-authenticate.");
+            } else {
+              alert("Sync failed: " + (res?.error || "Unknown error"));
             }
+          } catch (syncErr) {
+            alert("Sync error: " + (syncErr && syncErr.message ? syncErr.message : String(syncErr)));
           } finally {
-            syncBtn.style.opacity = "1";
+            syncBtn.disabled = false;
           }
         };
-        li.appendChild(syncBtn);
+        actions.appendChild(syncBtn);
+      }
+
+      if (actions.hasChildNodes()) {
+        li.appendChild(actions);
       }
     }
 
@@ -1329,6 +1356,28 @@ function createOpenIcon() {
   return svg;
 }
 
+function createStarIcon(isStarred) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("aria-hidden", "true");
+  if (isStarred) {
+    svg.setAttribute("fill", "#E5A93C");
+    svg.setAttribute("stroke", "#E5A93C");
+  } else {
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+  }
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  poly.setAttribute("points", "12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2");
+  svg.appendChild(poly);
+  return svg;
+}
+
 function makeChatItem(chat) {
   const account = state.accounts[chat.accountId] || {};
   const isStarred = state.starredChatIds.has(chat.storageId);
@@ -1364,16 +1413,17 @@ function makeChatItem(chat) {
     chat.serverUpdatedAt || chat.sectionTimestamp || chat.lastSeen;
   dateSpan.textContent = formatChatDate(displayTs);
 
+  const acctName = shortAccountName(account);
+  const isMatch = canOpenWithoutMismatchWarning(chat);
   const badge = document.createElement("span");
-  badge.className = "status-badge";
-  if (canOpenWithoutMismatchWarning(chat)) {
-    badge.classList.add("ready");
-    badge.textContent = "Ready";
-    badge.title = "Ready in current session";
+  badge.className = "chat-account-tag";
+  badge.textContent = acctName;
+  if (isMatch) {
+    badge.classList.add("current-account");
+    badge.title = `Account: ${acctName} (Active session)`;
   } else {
-    badge.classList.add("switch");
-    badge.textContent = shortAccountName(account);
-    badge.title = `Switch to ${shortAccountName(account)} to open`;
+    badge.classList.add("other-account");
+    badge.title = `Switch to ${acctName} to open`;
   }
 
   meta.append(dateSpan, badge);
@@ -1408,7 +1458,7 @@ function makeChatItem(chat) {
   starBtn.type = "button";
   starBtn.className = "star-btn";
   starBtn.setAttribute("aria-label", isStarred ? "Unstar chat" : "Star chat");
-  starBtn.textContent = isStarred ? "\u2605" : "\u2606"; // ★ / ☆
+  starBtn.appendChild(createStarIcon(isStarred));
   starBtn.addEventListener("click", (e) => {
     e.stopPropagation(); // don't open the chat when clicking the star
     toggleStar(chat.storageId);
@@ -1416,7 +1466,7 @@ function makeChatItem(chat) {
 
   item.append(dot, info, starBtn, mark);
   item.title = !canOpenWithoutMismatchWarning(chat)
-    ? `${chat.title || "Untitled Chat"} - requires ${shortAccountName(account)}`
+    ? `${chat.title || "Untitled Chat"} - requires ${acctName}`
     : chat.title || "";
 
   item.addEventListener("click", () => {
@@ -1655,9 +1705,13 @@ function _renderChatListItems(list, summary, allChats) {
     }
   }
 
-  summary.textContent = state.query.trim()
-    ? `${allChats.length} match${allChats.length === 1 ? "" : "es"}${modeSuffix}`
-    : "Newest first, matching Claude Recents";
+  if (state.query.trim()) {
+    summary.style.display = "block";
+    summary.textContent = `${allChats.length} match${allChats.length === 1 ? "" : "es"}${modeSuffix}`;
+  } else {
+    summary.style.display = "none";
+    summary.textContent = "";
+  }
 
   if (allChats.length === 0) {
     const empty = document.createElement("div");
@@ -1713,6 +1767,10 @@ async function updateQuotaDisplay() {
     fill.style.width = `${pct}%`;
     fill.style.background =
       pct > 85 ? "#D9784A" : pct > 60 ? "#C9A227" : "#45A878";
+    const pctText = document.getElementById("quotaPercentText");
+    if (pctText) {
+      pctText.textContent = `${pct}% (${Math.round(used / 1024)}KB / ${Math.round(total / 1024)}KB)`;
+    }
     bar.title = `Sync storage: ${pct}% used (${Math.round(used / 1024)}KB / ${Math.round(total / 1024)}KB)`;
 
     // Set module-level flag; renderStatus() will include it on the NEXT render cycle
@@ -2307,6 +2365,7 @@ function bindEvents() {
         state.accounts[account.accountId] = {
           ...account,
           displayName: nextName,
+          autoDetectedName: false,
         };
         await persistData();
         render();
