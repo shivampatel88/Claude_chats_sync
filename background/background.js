@@ -318,16 +318,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       const activeAccountId = data.currentAccountId;
-      // Snapshot current browser cookies before swapping
-      const activeCookies = await self.CctVault.getActiveClaudeCookies();
+      const isAlreadyActive = Boolean(activeAccountId && activeAccountId === targetAccountId);
+      // Snapshot current browser cookies before swapping (only needed if swapping)
+      const activeCookies = isAlreadyActive ? [] : await self.CctVault.getActiveClaudeCookies();
 
       let targetOrgId = targetSession.orgId;
       let newChatsCount = 0;
 
       try {
-        // 1. Transient Swap: inject target account's cookies into the cookie jar
-        await self.CctVault.clearClaudeCookies();
-        await self.CctVault.injectCookies(targetSession.cookies);
+        if (!isAlreadyActive) {
+          // 1. Transient Swap: inject target account's cookies into the cookie jar
+          await self.CctVault.clearClaudeCookies();
+          await self.CctVault.injectCookies(targetSession.cookies);
+        }
 
         // 2. Resolve organization UUID if missing
         if (!targetOrgId) {
@@ -426,15 +429,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         targetAccount.lastSeen = now;
         accounts[targetAccountId] = targetAccount;
 
-        // Queue write via existing sync pipeline
-        syncQueue.push({
-          accounts: { [targetAccountId]: targetAccount },
-          chats: incomingChats,
-          deletedAccounts: {},
-          deletedChatIds: [],
-          resolve: () => {},
+        // Dual-write into local storage immediately
+        const localCurrentChats = data.chats || {};
+        const mergedLocalChats = { ...localCurrentChats, ...incomingChats };
+        await chrome.storage.local.set({
+          accounts: { ...accounts, [targetAccountId]: targetAccount },
+          chats: mergedLocalChats,
         });
-        processQueue();
+
+        // Queue write via existing sync pipeline and await completion before responding
+        await new Promise((resolve) => {
+          syncQueue.push({
+            accounts: { [targetAccountId]: targetAccount },
+            chats: incomingChats,
+            deletedAccounts: {},
+            deletedChatIds: [],
+            resolve,
+          });
+          processQueue();
+        });
 
         newChatsCount = Object.keys(incomingChats).length;
         bgLog(`✅ VAULT_SYNC_ACCOUNT completed: synced ${newChatsCount} chats for ${targetAccountId}`);
@@ -443,18 +456,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         bgWarn("VAULT_SYNC_ACCOUNT error:", syncErr);
         sendResponse({ ok: false, error: syncErr && syncErr.message ? syncErr.message : String(syncErr) });
       } finally {
-        // 5. Unconditional Restoration: ALWAYS restore the original active account's cookies!
-        try {
-          await self.CctVault.clearClaudeCookies();
-          if (activeCookies.length > 0) {
-            await self.CctVault.injectCookies(activeCookies);
+        if (!isAlreadyActive) {
+          // 5. Unconditional Restoration: ALWAYS restore the original active account's cookies!
+          try {
+            await self.CctVault.clearClaudeCookies();
+            if (activeCookies.length > 0) {
+              await self.CctVault.injectCookies(activeCookies);
+            }
+            if (activeAccountId) {
+              await chrome.storage.local.set({ currentAccountId: activeAccountId });
+            }
+            bgLog("🔄 Restored original active session cookies.");
+          } catch (restoreErr) {
+            bgWarn("Error restoring active session cookies in finally block:", restoreErr);
           }
-          if (activeAccountId) {
-            await chrome.storage.local.set({ currentAccountId: activeAccountId });
-          }
-          bgLog("🔄 Restored original active session cookies.");
-        } catch (restoreErr) {
-          bgWarn("Error restoring active session cookies in finally block:", restoreErr);
         }
       }
     })();
