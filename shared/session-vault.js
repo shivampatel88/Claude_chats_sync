@@ -143,21 +143,32 @@
       return null;
     }
 
-    // Extract orgId from parameter or lastActiveOrg cookie
-    let resolvedOrgId = orgId;
-    if (!resolvedOrgId) {
-      const orgCookie = cookies.find((c) => c.name === "lastActiveOrg" && c.value);
-      if (orgCookie) {
-        resolvedOrgId = orgCookie.value;
+    // Extract orgId from lastActiveOrg cookie
+    const orgCookie = cookies.find((c) => c.name === "lastActiveOrg" && c.value);
+    const activeCookieOrgId = orgCookie ? orgCookie.value : null;
+
+    // Safety guard: prevent cross-contamination!
+    if (orgId && activeCookieOrgId && orgId !== activeCookieOrgId) {
+      vWarn(`Active browser session (${activeCookieOrgId}) does not match requested orgId (${orgId}); capture aborted.`);
+      return null;
+    }
+
+    const resolvedOrgId = orgId || activeCookieOrgId;
+    let targetAccountId = accountId;
+    if (resolvedOrgId) {
+      const canonicalAccountId = `acc_org_${resolvedOrgId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`;
+      if (accountId.startsWith("acc_org_") && accountId !== canonicalAccountId) {
+        vWarn(`Active browser session belongs to ${canonicalAccountId}, not ${accountId}; redirecting capture to canonical account.`);
+        targetAccountId = canonicalAccountId;
       }
     }
 
     const data = await chrome.storage.local.get(VAULT_STORAGE_KEY);
     const vault = data[VAULT_STORAGE_KEY] || {};
 
-    const existing = vault[accountId] || {};
-    vault[accountId] = {
-      accountId,
+    const existing = vault[targetAccountId] || {};
+    vault[targetAccountId] = {
+      accountId: targetAccountId,
       orgId: resolvedOrgId || existing.orgId || null,
       email: email || existing.email || null,
       savedAt: Date.now(),
@@ -166,8 +177,8 @@
     };
 
     await chrome.storage.local.set({ [VAULT_STORAGE_KEY]: vault });
-    vLog(`💾 Session vault saved for ${accountId} (${email || "no email"}) with ${cookies.length} cookies (orgId: ${resolvedOrgId || "unknown"})`);
-    return vault[accountId];
+    vLog(`💾 Session vault saved for ${targetAccountId} (${email || "no email"}) with ${cookies.length} cookies (orgId: ${resolvedOrgId || "unknown"})`);
+    return vault[targetAccountId];
   }
 
   /**
