@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Claude Chat Sync",
-  "version": "6.3.1",
+  "version": "6.3.2",
   "description": "Track and sync visible Claude.ai chats across your Chrome profiles.",
-  "permissions": ["storage", "unlimitedStorage", "cookies", "declarativeNetRequest", "tabs"],
+  "permissions": ["storage", "unlimitedStorage", "cookies", "declarativeNetRequest"],
   "host_permissions": [
     "https://claude.ai/*",
     "https://anthropic.com/*",
