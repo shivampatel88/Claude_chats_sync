@@ -425,7 +425,10 @@
 
     const title = document.createElement("div");
     if (isLoginPage() && email) {
-      title.innerHTML = `Signing in as <span style="color:#f4a261;font-weight:800;letter-spacing:.01em">${email}</span>…`;
+      const emailSpan = document.createElement("span");
+      emailSpan.style.cssText = "color:#f4a261;font-weight:800;letter-spacing:.01em";
+      emailSpan.textContent = email;
+      title.append("Signing in as ", emailSpan, "…");
     } else {
       title.textContent = `Switch to "${pendingOpen.accountName}" — logging in…`;
     }
