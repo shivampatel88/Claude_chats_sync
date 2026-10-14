@@ -249,6 +249,18 @@ input {
   border-color: transparent;
 }
 
+.icon-button:focus-visible,
+.ghost-button:focus-visible,
+.small-button:focus-visible,
+.text-button:focus-visible,
+.mode-tab:focus-visible,
+.filter-pill:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  outline: 1.5px solid rgba(255, 255, 255, 0.25);
+  outline-offset: -1px;
+}
+
 .danger-button {
   color: var(--danger);
 }
@@ -337,6 +349,12 @@ input {
 
 .acct-filter-trigger:hover {
   background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.acct-filter-trigger:focus-visible {
+  outline: 1.5px solid rgba(255, 255, 255, 0.25);
+  outline-offset: -1px;
   color: var(--text);
 }
 
@@ -503,13 +521,21 @@ input {
   transition: background 0.1s ease;
 }
 
-.chat-item:hover,
-.chat-item:focus {
+.chat-item:hover {
   background: rgba(255, 255, 255, 0.045);
   border-color: transparent;
   transform: none;
   box-shadow: none;
+}
+
+.chat-item:focus {
   outline: none;
+}
+
+.chat-item:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  outline: 1.5px solid rgba(255, 255, 255, 0.22);
+  outline-offset: -1px;
 }
 
 .chat-item.account-mismatch {
@@ -521,6 +547,8 @@ input {
   height: 7px;
   border-radius: 999px;
   box-shadow: none;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 .chat-info {
@@ -541,7 +569,8 @@ input {
   transition: color 0.1s ease;
 }
 
-.chat-item:hover .chat-title {
+.chat-item:hover .chat-title,
+.chat-item:focus-visible .chat-title {
   color: #ffffff;
 }
 
@@ -553,10 +582,13 @@ input {
   margin-top: 3px;
   color: var(--soft);
   font-size: 11px;
+  line-height: 16px;
 }
 
 .chat-date {
   color: var(--soft);
+  line-height: 16px;
+  flex-shrink: 0;
 }
 
 .chat-account-tag {
@@ -568,6 +600,8 @@ input {
   border-radius: 3px;
   border: none;
   max-width: 140px;
+  height: 16px;
+  line-height: 16px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -601,7 +635,8 @@ input {
   height: 12px;
 }
 
-.chat-item:hover .open-mark {
+.chat-item:hover .open-mark,
+.chat-item:focus-visible .open-mark {
   opacity: 0.7;
   color: var(--text);
 }
@@ -656,6 +691,8 @@ button.section-header-collapsible:hover {
 button.section-header-collapsible:focus-visible {
   color: var(--text);
   background: rgba(255, 255, 255, 0.04);
+  outline: 1.5px solid rgba(255, 255, 255, 0.2);
+  outline-offset: -1px;
 }
 
 .section-header-title {
@@ -724,14 +761,22 @@ button.section-header-collapsible[aria-expanded="true"] .section-chevron {
   transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
-.chat-item:hover .star-btn {
+.chat-item:hover .star-btn,
+.chat-item:focus-visible .star-btn {
   opacity: 0.85;
 }
 
 .star-btn:hover {
   opacity: 1;
   color: var(--yellow);
-  transform: scale(1.15);
+  transform: scale(1.12);
+}
+
+.star-btn:focus-visible {
+  opacity: 1;
+  color: var(--yellow);
+  outline: 1.5px solid rgba(255, 255, 255, 0.3);
+  outline-offset: 1px;
 }
 
 /* Starred items styling: open row matching general list, gold star as primary indication */
@@ -740,9 +785,14 @@ button.section-header-collapsible[aria-expanded="true"] .section-chevron {
   border-color: transparent;
 }
 
-.chat-item.is-starred:hover,
-.chat-item.is-starred:focus {
+.chat-item.is-starred:hover {
   background: rgba(255, 255, 255, 0.045);
+}
+
+.chat-item.is-starred:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  outline: 1.5px solid rgba(255, 255, 255, 0.22);
+  outline-offset: -1px;
 }
 
 .chat-item.is-starred .star-btn {
