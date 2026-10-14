@@ -28,6 +28,7 @@
   let _timer = null;
 
   function _push(category, data) {
+    if (typeof window !== "undefined" && !window.CCT_DEV_MODE) return;
     _buf.push({ t: Date.now(), c: category, d: data });
     // Trim buffer if it grows beyond 2× cap (prevents unbounded growth on high-event pages).
     if (_buf.length > MAX_ENTRIES * 2) {

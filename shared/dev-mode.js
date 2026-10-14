@@ -29,9 +29,18 @@
   // It starts false and is updated once the async storage read resolves.
   window.CCT_DEV_MODE = false;
 
+  // ── Original console methods cache ─────────────────────────────────────────
+  const _origConsole = {
+    log: console.log,
+    warn: console.warn,
+    info: console.info,
+    debug: console.debug,
+    group: console.group,
+    groupEnd: console.groupEnd,
+  };
+
   // ── Console silencer ─────────────────────────────────────────────────────
   // Replaces console output methods with no-ops for this entire JS context.
-  // Called immediately when devMode is confirmed to be OFF.
   function _silenceLogs() {
     const noop = function () {};
     console.log   = noop;
@@ -41,6 +50,18 @@
     console.group    = noop;
     console.groupEnd = noop;
   }
+
+  function _restoreLogs() {
+    console.log      = _origConsole.log;
+    console.warn     = _origConsole.warn;
+    console.info     = _origConsole.info;
+    console.debug    = _origConsole.debug;
+    console.group    = _origConsole.group;
+    console.groupEnd = _origConsole.groupEnd;
+  }
+
+  // Silence logs immediately on script load so synchronous startup code never leaks
+  _silenceLogs();
 
   // ── Public toggle ────────────────────────────────────────────────────────
   // Called by the 5-tap handler in popup.js.
@@ -52,6 +73,12 @@
       const stored = await chrome.storage.local.get([DEV_STORAGE_KEY]);
       const next = !stored[DEV_STORAGE_KEY];
       await chrome.storage.local.set({ [DEV_STORAGE_KEY]: next });
+      window.CCT_DEV_MODE = next;
+      if (next) {
+        _restoreLogs();
+      } else {
+        _silenceLogs();
+      }
       return next;
     } catch (_) {
       return false;
@@ -63,18 +90,18 @@
   // can await it before calling applyDevMode() and rendering.
   window.cctDevModeReady = (async function () {
     if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
-      // Plain-browser test environment — silence logs and bail out.
-      _silenceLogs();
+      // Plain-browser test environment — logs already silenced, bail out.
       return false;
     }
     try {
       const stored = await chrome.storage.local.get([DEV_STORAGE_KEY]);
       const isDev = !!stored[DEV_STORAGE_KEY];
       window.CCT_DEV_MODE = isDev;
-      if (!isDev) _silenceLogs();
+      if (isDev) {
+        _restoreLogs();
+      }
       return isDev;
     } catch (_) {
-      _silenceLogs();
       return false;
     }
   })();
