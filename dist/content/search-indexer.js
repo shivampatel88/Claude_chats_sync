@@ -194,6 +194,14 @@
           }
         }
         if (state.status !== "running") return;
+        const currentStorage = await chrome.storage.local.get(["currentAccountId"]);
+        if (currentStorage.currentAccountId && currentStorage.currentAccountId !== state.accountId) {
+          cctWarn(`Active account switched (${state.accountId} -> ${currentStorage.currentAccountId}); aborting indexing queue.`);
+          state.status = "idle";
+          state.pendingChatIds = [];
+          await this.saveState(state);
+          return;
+        }
         if (document.hidden) {
           cctLog(`Tab is hidden, pausing queue...`);
           state.status = "paused-tab-hidden";
@@ -267,6 +275,8 @@
                   state.embeddingError = "invalid-key";
                 } else if (msg === "RATE_LIMITED") {
                   cctWarn("Gemini rate limit hit \u2014 backing off for 15s before continuing");
+                  state.doneChatIds.pop();
+                  state.pendingChatIds.unshift(chatId);
                   state.status = "paused-ratelimited";
                   state.pausedAt = Date.now();
                   state.rateLimitCooldownMs = 15e3;
@@ -283,14 +293,32 @@
           }
         } catch (err) {
           if (err instanceof RateLimitError) {
-            cctWarn(`Rate limit hit, pausing for 5 minutes...`);
-            state.pendingChatIds.unshift(chatId);
-            state.status = "paused-ratelimited";
-            state.pausedAt = Date.now();
-            state.rateLimitCooldownMs = this.rateLimitPauseMs;
-            await this.saveState(state);
-            this._scheduleNext(this.rateLimitPauseMs);
-            return;
+            state.retryCounts = state.retryCounts || {};
+            const attempts = (state.retryCounts[chatId] || 0) + 1;
+            state.retryCounts[chatId] = attempts;
+            if (err.status === 403) {
+              const liveOrgId = await window.__cctInternal?.fetchOrganizationId?.();
+              if (!liveOrgId || liveOrgId !== state.orgId) {
+                cctWarn(`Session orgId changed or logged out on 403; aborting queue.`);
+                state.status = "idle";
+                state.pendingChatIds = [];
+                await this.saveState(state);
+                return;
+              }
+            }
+            if (attempts > 3) {
+              cctWarn(`Chat ${chatId} exceeded max retries (${attempts}) on status ${err.status}; marking failed.`);
+              state.failedChatIds.push(chatId);
+            } else {
+              cctWarn(`Rate limit hit (attempt ${attempts}/3), pausing for 5 minutes...`);
+              state.pendingChatIds.unshift(chatId);
+              state.status = "paused-ratelimited";
+              state.pausedAt = Date.now();
+              state.rateLimitCooldownMs = this.rateLimitPauseMs;
+              await this.saveState(state);
+              this._scheduleNext(this.rateLimitPauseMs);
+              return;
+            }
           } else {
             cctWarn(`Failed to process chat ${chatId}:`, err);
             state.failedChatIds.push(chatId);
