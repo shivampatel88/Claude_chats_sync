@@ -93,6 +93,43 @@ async function readSyncedData() {
 
 let syncInProgress = false;
 const syncQueue = [];
+let vaultSwapMutex = Promise.resolve();
+const VAULT_RECOVERY_KEY = "vaultSwapRecoveryJournal";
+
+// Fail-safe startup recovery: if the SW crashed mid-swap, restore original cookies immediately.
+async function recoverInterruptedVaultSwap() {
+  if (!self.CctVault) return;
+  try {
+    const data = await chrome.storage.local.get([VAULT_RECOVERY_KEY]);
+    const journal = data[VAULT_RECOVERY_KEY];
+    if (journal && Array.isArray(journal.activeCookies)) {
+      bgWarn("⚠️ Recovering interrupted vault cookie swap for:", journal.activeAccountId);
+      await self.CctVault.clearClaudeCookies();
+      if (journal.activeCookies.length > 0) {
+        await self.CctVault.injectCookies(journal.activeCookies);
+      }
+      if (journal.activeAccountId) {
+        await chrome.storage.local.set({ currentAccountId: journal.activeAccountId });
+      }
+      await chrome.storage.local.remove([VAULT_RECOVERY_KEY]);
+    }
+  } catch (err) {
+    bgWarn("⚠️ Failed to recover interrupted vault swap:", err);
+  }
+}
+recoverInterruptedVaultSwap();
+
+function withVaultLock(fn) {
+  const next = vaultSwapMutex.then(fn, fn);
+  vaultSwapMutex = next.catch(() => {});
+  return next;
+}
+
+function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
 
 // Structured logging for the background service worker (visible in chrome://extensions → service worker)
 // bgLog/bgWarn are silenced when developer mode is OFF (devMode key not set in chrome.storage.local).
@@ -125,8 +162,11 @@ let bgWarn = (...a) => console.warn(BGT, ...a);
 // The rule is removed immediately after login completes or is cancelled.
 const LOGIN_HINT_RULE_ID = 1001; // arbitrary stable ID for our single dynamic rule
 
+let loginHintTimer = null;
+
 async function setLoginHintRule(email) {
   if (!email || typeof chrome.declarativeNetRequest === "undefined") return;
+  if (loginHintTimer) clearTimeout(loginHintTimer);
   try {
     // Remove any existing rule first (idempotent).
     await chrome.declarativeNetRequest.updateDynamicRules({
@@ -156,12 +196,17 @@ async function setLoginHintRule(email) {
       ],
     });
     bgLog("🔑 login_hint rule set for:", email);
+    loginHintTimer = setTimeout(clearLoginHintRule, 60000);
   } catch (err) {
     bgWarn("⚠️ setLoginHintRule error:", err && err.message);
   }
 }
 
 async function clearLoginHintRule() {
+  if (loginHintTimer) {
+    clearTimeout(loginHintTimer);
+    loginHintTimer = null;
+  }
   if (typeof chrome.declarativeNetRequest === "undefined") return;
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({
@@ -177,6 +222,19 @@ async function clearLoginHintRule() {
 clearLoginHintRule();
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Validate sender
+  if (_sender && _sender.id && _sender.id !== chrome.runtime.id) {
+    sendResponse({ ok: false, error: "Unauthorized sender" });
+    return false;
+  }
+  // Restrict privileged messages if originating from accounts.google.com
+  const senderUrl = _sender?.tab?.url || _sender?.url || "";
+  if (senderUrl.startsWith("https://accounts.google.com")) {
+    if (message.type !== "CLEAR_LOGIN_HINT") {
+      sendResponse({ ok: false, error: "Forbidden message from this origin" });
+      return false;
+    }
+  }
   // TOMBSTONE_ACCOUNT
   if (message.type === "TOMBSTONE_ACCOUNT") {
     const { accountId } = message;
@@ -299,7 +357,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "VAULT_SYNC_ACCOUNT") {
     const { targetAccountId } = message;
     bgLog(`⚡ VAULT_SYNC_ACCOUNT requested for: ${targetAccountId}`);
-    (async () => {
+    withVaultLock(async () => {
       if (!self.CctVault) {
         sendResponse({ ok: false, error: "Session vault not loaded" });
         return;
@@ -327,6 +385,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       try {
         if (!isAlreadyActive) {
+          await chrome.storage.local.set({
+            [VAULT_RECOVERY_KEY]: {
+              activeAccountId,
+              activeCookies,
+              startedAt: Date.now(),
+            },
+          });
           // 1. Transient Swap: inject target account's cookies into the cookie jar
           await self.CctVault.clearClaudeCookies();
           await self.CctVault.injectCookies(targetSession.cookies);
@@ -335,7 +400,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         // 2. Resolve organization UUID if missing
         if (!targetOrgId) {
           try {
-            const orgRes = await fetch("https://claude.ai/api/organizations", {
+            const orgRes = await fetchWithTimeout("https://claude.ai/api/organizations", {
               credentials: "include",
               headers: { Accept: "application/json" },
             });
@@ -369,7 +434,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         // 3. Fetch conversations from Claude REST API
-        const convRes = await fetch(
+        const convRes = await fetchWithTimeout(
           `https://claude.ai/api/organizations/${targetOrgId}/chat_conversations?limit=100`,
           { credentials: "include", headers: { Accept: "application/json" } }
         );
@@ -466,13 +531,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             if (activeAccountId) {
               await chrome.storage.local.set({ currentAccountId: activeAccountId });
             }
+            await chrome.storage.local.remove([VAULT_RECOVERY_KEY]);
             bgLog("🔄 Restored original active session cookies.");
           } catch (restoreErr) {
             bgWarn("Error restoring active session cookies in finally block:", restoreErr);
           }
         }
       }
-    })();
+    });
     return true;
   }
 
