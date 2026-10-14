@@ -38,18 +38,26 @@
         throw new Error(bgResult.error || "Failed to generate embedding");
       }
     }
-    const res = await fetch(GEMINI_EMBED_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify({
-        model: "models/gemini-embedding-001",
-        content: { parts: [{ text: cleanText }] },
-        outputDimensionality: OUTPUT_DIMENSIONS
-      })
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15e3);
+    let res;
+    try {
+      res = await fetch(GEMINI_EMBED_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify({
+          model: "models/gemini-embedding-001",
+          content: { parts: [{ text: cleanText }] },
+          outputDimensionality: OUTPUT_DIMENSIONS
+        }),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (res.status === 401 || res.status === 403) {
       throw new Error("INVALID_KEY");
     }

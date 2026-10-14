@@ -558,7 +558,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       try {
         const truncated = text.length > 2000 ? text.slice(0, 2000) : text;
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
           {
             method: "POST",
@@ -571,7 +571,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               content: { parts: [{ text: truncated }] },
               outputDimensionality: 768,
             }),
-          }
+          },
+          15000
         );
 
         if (res.status === 401 || res.status === 403) {

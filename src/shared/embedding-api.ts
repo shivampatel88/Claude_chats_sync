@@ -64,18 +64,26 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
   }
 
   // Direct fetch fallback (active when running in extension popup or background worker)
-  const res = await fetch(GEMINI_EMBED_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      model: 'models/gemini-embedding-001',
-      content: { parts: [{ text: cleanText }] },
-      outputDimensionality: OUTPUT_DIMENSIONS,
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let res: Response;
+  try {
+    res = await fetch(GEMINI_EMBED_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        model: 'models/gemini-embedding-001',
+        content: { parts: [{ text: cleanText }] },
+        outputDimensionality: OUTPUT_DIMENSIONS,
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (res.status === 401 || res.status === 403) {
     throw new Error('INVALID_KEY');
