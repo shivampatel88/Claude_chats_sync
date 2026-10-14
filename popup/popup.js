@@ -722,7 +722,7 @@ async function updateVaultStatusUI(account) {
       if (hasSaved) {
         if (state.currentAccountId) {
           const curAcct = state.accounts[state.currentAccountId] || {};
-          await window.CctVault.captureSession(state.currentAccountId, curAcct.email);
+          await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curAcct.orgId);
         }
         const restoreRes = await window.CctVault.restoreSession(account.accountId);
         if (restoreRes && restoreRes.ok) {
@@ -739,6 +739,7 @@ async function updateVaultStatusUI(account) {
       }
 
       // Standard OAuth login flow fallback
+      const prevAccount = state.accounts[state.currentAccountId] || {};
       state.currentAccountId = account.accountId;
       await storageSet({
         currentAccountId: account.accountId,
@@ -746,7 +747,7 @@ async function updateVaultStatusUI(account) {
           accountId: account.accountId,
           accountEmail: account.email || null,
           accountName: shortAccountName(account),
-          previousAccountName: shortAccountName(state.accounts[state.currentAccountId] || {}),
+          previousAccountName: shortAccountName(prevAccount),
           chatTitle: "Chats",
           chatUrl: "https://claude.ai/chats",
           createdAt: Date.now(),
@@ -1046,8 +1047,11 @@ function renderFilters() {
   const addMenuItem = (label, accountId, color) => {
     const li = document.createElement("li");
     li.role = "option";
+    li.tabIndex = 0;
     li.dataset.value = accountId;
-    if (state.activeAccountId === accountId) {
+    const isSelected = state.activeAccountId === accountId;
+    li.setAttribute("aria-selected", String(isSelected));
+    if (isSelected) {
       li.className = "active";
     }
 
@@ -1103,6 +1107,10 @@ function renderFilters() {
           switchBtn.disabled = true;
           try {
             if (window.CctVault && window.CctVault.restoreSession) {
+              if (state.currentAccountId && window.CctVault.captureSession) {
+                const curAcct = state.accounts[state.currentAccountId] || {};
+                await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curAcct.orgId);
+              }
               const res = await window.CctVault.restoreSession(accountId);
               if (res && res.ok) {
                 state.currentAccountId = accountId;
@@ -1163,13 +1171,23 @@ function renderFilters() {
       }
     }
 
-    li.addEventListener("click", (e) => {
+    const selectAccount = (e) => {
       e.stopPropagation();
       state.activeAccountId = accountId;
       menu.style.display = "none";
       const container = document.getElementById("acctFilterContainer");
       if (container) container.classList.remove("open");
+      const trigger = document.getElementById("acctFilterTrigger");
+      if (trigger) trigger.setAttribute("aria-expanded", "false");
       render();
+    };
+
+    li.addEventListener("click", selectAccount);
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        selectAccount(e);
+      }
     });
 
     menu.appendChild(li);
@@ -1241,7 +1259,7 @@ async function openChat(chat) {
       // Snapshot current session before swapping so we never lose it
       if (state.currentAccountId) {
         const curAcct = state.accounts[state.currentAccountId] || {};
-        await window.CctVault.captureSession(state.currentAccountId, curAcct.email);
+        await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curAcct.orgId);
       }
       // Restore target account's session
       const restoreRes = await window.CctVault.restoreSession(chat.accountId);
@@ -1445,15 +1463,25 @@ function makeChatItem(chat) {
   if (chat._snippet) {
     const snippetEl = document.createElement("div");
     snippetEl.className = "chat-snippet";
-    const escapedSnippet = chat._snippet
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
     const qTokens = state.query.trim().split(/\s+/).filter((t) => t.length >= 2);
     if (qTokens.length > 0) {
       const pattern = qTokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
       const regex = new RegExp(`(${pattern})`, "gi");
-      snippetEl.innerHTML = escapedSnippet.replace(regex, "<mark>$1</mark>");
+      let lastIdx = 0;
+      let match;
+      while ((match = regex.exec(chat._snippet)) !== null) {
+        if (match.index > lastIdx) {
+          snippetEl.appendChild(document.createTextNode(chat._snippet.slice(lastIdx, match.index)));
+        }
+        const markEl = document.createElement("mark");
+        markEl.textContent = match[0];
+        snippetEl.appendChild(markEl);
+        lastIdx = regex.lastIndex;
+        if (match[0].length === 0) regex.lastIndex++;
+      }
+      if (lastIdx < chat._snippet.length) {
+        snippetEl.appendChild(document.createTextNode(chat._snippet.slice(lastIdx)));
+      }
     } else {
       snippetEl.textContent = chat._snippet;
     }
@@ -1483,6 +1511,7 @@ function makeChatItem(chat) {
   });
 
   item.addEventListener("keydown", (e) => {
+    if (e.target !== item) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       openChat(chat);
@@ -2183,9 +2212,25 @@ function bindEvents() {
       if (isOpen) {
         acctContainer.classList.remove("open");
         filterMenu.style.display = "none";
+        triggerBtn.setAttribute("aria-expanded", "false");
       } else {
         acctContainer.classList.add("open");
         filterMenu.style.display = "";
+        triggerBtn.setAttribute("aria-expanded", "true");
+        const activeOption = filterMenu.querySelector('[aria-selected="true"]') || filterMenu.firstElementChild;
+        if (activeOption && typeof activeOption.focus === "function") {
+          activeOption.focus();
+        }
+      }
+    });
+
+    filterMenu.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        acctContainer.classList.remove("open");
+        filterMenu.style.display = "none";
+        triggerBtn.setAttribute("aria-expanded", "false");
+        triggerBtn.focus();
       }
     });
 
@@ -2193,6 +2238,7 @@ function bindEvents() {
     document.addEventListener("click", () => {
       if (acctContainer) acctContainer.classList.remove("open");
       if (filterMenu) filterMenu.style.display = "none";
+      if (triggerBtn) triggerBtn.setAttribute("aria-expanded", "false");
     });
   }
 

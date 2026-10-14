@@ -443,9 +443,15 @@ input {
   transition: all 0.15s ease;
 }
 
-.acct-filter-menu li:hover {
+.acct-filter-menu li:hover,
+.acct-filter-menu li:focus-visible {
   background: rgba(255, 255, 255, 0.08);
   color: #ffffff;
+}
+
+.acct-filter-menu li:focus-visible {
+  outline: 1.5px solid rgba(255, 255, 255, 0.25);
+  outline-offset: -1px;
 }
 
 .acct-filter-menu li.active {
