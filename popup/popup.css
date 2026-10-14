@@ -895,38 +895,49 @@ button.section-header-collapsible[aria-expanded="true"] .section-chevron {
 /* ─── Phase B: Semantic Search Drawer ──────────────────────── */
 
 #semanticGearBtn {
-  width: 35px;
-  height: 35px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.035);
+  border: none;
+  background: transparent;
   border-radius: 6px;
   cursor: pointer;
   display: grid;
   place-items: center;
   box-shadow: none;
-  transition: all 0.12s ease;
+  padding: 0;
+  color: var(--soft);
+  transition: color 0.12s ease, background 0.12s ease;
 }
 
 #semanticGearBtn svg {
-  width: 15px;
-  height: 15px;
-  stroke: var(--soft);
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
   fill: none;
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: stroke 0.12s ease, transform 0.2s ease;
+  transition: transform 0.25s ease;
 }
 
-#semanticGearBtn:hover {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.07);
+#semanticGearBtn:hover,
+#semanticGearBtn:focus-visible {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: transparent;
+  outline: none;
 }
 
-#semanticGearBtn:hover svg {
-  stroke: var(--text);
+#semanticGearBtn:hover svg,
+#semanticGearBtn:focus-visible svg {
   transform: rotate(30deg);
+}
+
+#semanticGearBtn.active,
+#semanticGearBtn[aria-expanded="true"] {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .semantic-drawer {
