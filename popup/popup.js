@@ -2354,6 +2354,9 @@ function bindEvents() {
       if (window.deleteChatContentForAccount) {
         await window.deleteChatContentForAccount(account.accountId);
       }
+      if (window.deleteEmbeddingsForAccount) {
+        await window.deleteEmbeddingsForAccount(account.accountId);
+      }
       if (window.CctVault && window.CctVault.removeSavedSession) {
         await window.CctVault.removeSavedSession(account.accountId);
       }
