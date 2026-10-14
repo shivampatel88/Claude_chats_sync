@@ -30,6 +30,13 @@
     return;
   }
 
+  const PENDING_OPEN_TTL_MS = 60 * 1000;
+  if (!pendingOpen || Date.now() - Number(pendingOpen.createdAt || 0) > PENDING_OPEN_TTL_MS) {
+    chrome.storage.local.set({ pendingOpen: null }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "CLEAR_LOGIN_HINT" }).catch(() => {});
+    return;
+  }
+
   const email = pendingOpen && pendingOpen.accountEmail
     ? pendingOpen.accountEmail.toLowerCase().trim()
     : null;
@@ -44,10 +51,14 @@
 
   // ─── Utilities ────────────────────────────────────────────────────────────
 
+  function containsExactEmail(text, targetEmail) {
+    const escaped = targetEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|[^a-z0-9._%+-])${escaped}(?=$|[^a-z0-9.-])`, "i");
+    return re.test(text || "");
+  }
+
   function pageContainsEmail(targetEmail) {
-    return (document.body.innerText || document.body.textContent || "")
-      .toLowerCase()
-      .includes(targetEmail);
+    return containsExactEmail(document.body.innerText || document.body.textContent || "", targetEmail);
   }
 
   // Find the "Continue" (or "Sign in") confirmation button on the OAuth consent screen.
@@ -78,11 +89,11 @@
     let bestScore = Infinity;
     for (const el of candidates) {
       const text = (el.innerText || el.textContent || "").toLowerCase();
-      if (!text.includes(targetEmail)) continue;
+      if (!containsExactEmail(text, targetEmail)) continue;
       const childMatches = el.querySelectorAll("*");
       let score = 0;
       for (const child of childMatches) {
-        if ((child.innerText || child.textContent || "").toLowerCase().includes(targetEmail)) score++;
+        if (containsExactEmail(child.innerText || child.textContent || "", targetEmail)) score++;
       }
       if (score < bestScore) { bestScore = score; bestMatch = el; }
     }
