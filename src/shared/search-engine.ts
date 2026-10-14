@@ -171,6 +171,9 @@ const MIN_KEYWORD_SCORE_FRACTION = 0.1;
  * Handles zero-norm vectors safely (returns 0).
  */
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length === 0 || vecA.length !== vecB.length) {
+    return 0;
+  }
   let dot = 0;
   let normA = 0;
   let normB = 0;
@@ -179,7 +182,9 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
     normA += vecA[i] * vecA[i];
     normB += vecB[i] * vecB[i];
   }
-  return normA === 0 || normB === 0 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  if (normA === 0 || normB === 0) return 0;
+  const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  return Number.isFinite(sim) ? Math.max(0, sim) : 0;
 }
 
 /**
@@ -245,11 +250,22 @@ export async function searchContentHybrid(
     semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
   }
 
-  // Hoist getAllIndexedEntries() here so it is called at most once per search,
-  // regardless of which mode branch executes below.
-  const entries = semanticScoreMap.size > 0
-    ? await (window as any).getAllIndexedEntries() as Record<string, any>
-    : {};
+  // Prefer stored fields from MiniSearch directly to avoid reading full storage on every keystroke
+  const canUseStoredFields = index && typeof index.getStoredFields === 'function';
+  let entries: Record<string, any> = {};
+
+  const getRecord = async (storageId: string) => {
+    if (canUseStoredFields) {
+      try {
+        const stored = index.getStoredFields(storageId);
+        if (stored) return stored;
+      } catch (_) {}
+    }
+    if (Object.keys(entries).length === 0 && (window as any).getAllIndexedEntries) {
+      entries = (await (window as any).getAllIndexedEntries()) as Record<string, any>;
+    }
+    return entries[storageId] || null;
+  };
 
   // 4.5. Pure semantic search
   if (searchMode === 'semantic') {
@@ -257,7 +273,7 @@ export async function searchContentHybrid(
     if (semanticScoreMap.size > 0) {
       for (const [storageId, semScore] of semanticScoreMap.entries()) {
         if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
-          const record = entries[storageId];
+          const record = await getRecord(storageId);
           if (!record) continue;
           merged.push({
             storageId,
@@ -301,7 +317,7 @@ export async function searchContentHybrid(
         merged.get(storageId)!.semanticScore = semScore;
       } else if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
         // New semantic-only result — only include above the quality floor
-        const record = entries[storageId];
+        const record = await getRecord(storageId);
         if (!record) continue;
         merged.set(storageId, {
           storageId,

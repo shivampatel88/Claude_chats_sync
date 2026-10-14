@@ -82,6 +82,9 @@
   const MIN_COMBINED_SCORE = 0.15;
   const MIN_KEYWORD_SCORE_FRACTION = 0.1;
   function cosineSimilarity(vecA, vecB) {
+    if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length === 0 || vecA.length !== vecB.length) {
+      return 0;
+    }
     let dot = 0;
     let normA = 0;
     let normB = 0;
@@ -90,7 +93,9 @@
       normA += vecA[i] * vecA[i];
       normB += vecB[i] * vecB[i];
     }
-    return normA === 0 || normB === 0 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    if (normA === 0 || normB === 0) return 0;
+    const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    return Number.isFinite(sim) ? Math.max(0, sim) : 0;
   }
   async function searchContentHybrid(index, query, queryEmbedding, searchMode = "hybrid", accountId) {
     const queryWords = query.trim().split(/\s+/).filter((w) => w.length > 0).map((w) => w.toLowerCase());
@@ -114,13 +119,27 @@
       }
       semanticScoreMap.set(storageId, cosineSimilarity(queryEmbedding, vec));
     }
-    const entries = semanticScoreMap.size > 0 ? await window.getAllIndexedEntries() : {};
+    const canUseStoredFields = index && typeof index.getStoredFields === "function";
+    let entries = {};
+    const getRecord = async (storageId) => {
+      if (canUseStoredFields) {
+        try {
+          const stored = index.getStoredFields(storageId);
+          if (stored) return stored;
+        } catch (_) {
+        }
+      }
+      if (Object.keys(entries).length === 0 && window.getAllIndexedEntries) {
+        entries = await window.getAllIndexedEntries();
+      }
+      return entries[storageId] || null;
+    };
     if (searchMode === "semantic") {
       const merged2 = [];
       if (semanticScoreMap.size > 0) {
         for (const [storageId, semScore] of semanticScoreMap.entries()) {
           if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
-            const record = entries[storageId];
+            const record = await getRecord(storageId);
             if (!record) continue;
             merged2.push({
               storageId,
@@ -150,7 +169,7 @@
         if (merged.has(storageId)) {
           merged.get(storageId).semanticScore = semScore;
         } else if (semScore >= SEMANTIC_ONLY_THRESHOLD) {
-          const record = entries[storageId];
+          const record = await getRecord(storageId);
           if (!record) continue;
           merged.set(storageId, {
             storageId,
