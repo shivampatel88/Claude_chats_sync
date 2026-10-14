@@ -2510,9 +2510,13 @@ function bindEvents() {
       clearConfirmModal.style.display = "none";
 
       const synced = await readSyncedData();
-      const staleKeys = Array.from(
-        { length: Number(synced.meta.chatChunkCount || 0) },
-        (_value, index) => `${SYNC_KEYS.chatPrefix}${index}`,
+      const staleKeys = [];
+      for (let i = 0; i < Number(synced.meta.chatChunkCount || 0); i++) {
+        staleKeys.push(`${SYNC_KEYS.chatPrefix}${i}`, `${SYNC_KEYS.chatPrefix}${i}_a`, `${SYNC_KEYS.chatPrefix}${i}_b`);
+      }
+      const allLocal = await storageGet(null);
+      const dynamicIndexKeys = Object.keys(allLocal).filter(
+        (k) => k.startsWith("searchIndex") || k.startsWith("embeddingIndex")
       );
       await chrome.storage.local.remove([
         STORAGE_KEYS.accounts,
@@ -2524,10 +2528,16 @@ function bindEvents() {
         "deletedAccountIds",
         "deletedChatIds",
         "starredChatIds",
+        "indexingQueue",
+        "sessionVault",
+        "cct_diag_v1",
+        ...dynamicIndexKeys,
       ]);
-      await syncRemove([SYNC_KEYS.accounts, SYNC_KEYS.meta, ...staleKeys]);
+      await syncRemove([SYNC_KEYS.accounts, SYNC_KEYS.meta, SYNC_KEYS.deletedAccounts, ...staleKeys]);
 
       await storageSet({ rescrapeRequested: Date.now() });
+
+      searchIndexHandle = null;
 
       state.accounts = {};
       state.chats = {};
