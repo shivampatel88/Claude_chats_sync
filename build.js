@@ -1,18 +1,4 @@
-﻿const fs = require('fs');
 const esbuild = require('esbuild');
-
-let envKey = '';
-try {
-  if (fs.existsSync('.env')) {
-    const envContent = fs.readFileSync('.env', 'utf8');
-    const match = envContent.match(/^EMBEDDING_KEY=(.*)$/m);
-    if (match && match[1]) {
-      envKey = match[1].trim();
-    }
-  }
-} catch (e) {
-  console.warn('Warning: Could not read .env file', e);
-}
 
 esbuild.build({
   entryPoints: [
@@ -24,10 +10,7 @@ esbuild.build({
   outdir: 'dist',
   bundle: false,
   platform: 'browser',
-  format: 'iife',
-  define: {
-    'process.env.EMBEDDING_KEY': JSON.stringify(envKey)
-  }
+  format: 'iife'
 }).then(() => {
   console.log('Build completed successfully.');
 }).catch((err) => {
