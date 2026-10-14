@@ -121,6 +121,10 @@
       accountObserver.disconnect();
       accountObserver = null;
     }
+    if (claudeErrorSuppressor) {
+      claudeErrorSuppressor.disconnect();
+      claudeErrorSuppressor = null;
+    }
   }
 
   // Reset all per-session identity state.
@@ -1488,29 +1492,31 @@
   function getSectionBuckets() {
     const buckets = new Map(); // <a> element → bucket label string
     let currentLabel = null;
-    const container = document.querySelector(CHAT_CONTAINER_SELECTOR);
-    if (!container) return buckets;
+    const containers = Array.from(document.querySelectorAll(CHAT_CONTAINER_SELECTOR)).filter(isVisible);
+    if (containers.length === 0) return buckets;
 
-    for (const child of container.querySelectorAll("*")) {
-      const text = (child.textContent || "").replace(/\s+/g, " ").trim();
-      const isHeader =
-        text.length > 0 &&
-        text.length < 40 &&
-        !child.querySelector('a[href*="/chat/"]') &&
-        /^(today|yesterday|previous \d+ days?|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(
-          text,
-        );
+    for (const container of containers) {
+      for (const child of container.querySelectorAll("*")) {
+        const text = (child.textContent || "").replace(/\s+/g, " ").trim();
+        const isHeader =
+          text.length > 0 &&
+          text.length < 40 &&
+          !child.querySelector('a[href*="/chat/"]') &&
+          /^(today|yesterday|previous \d+ days?|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(
+            text,
+          );
 
-      if (isHeader) {
-        currentLabel = text.toLowerCase();
-        continue;
-      }
+        if (isHeader) {
+          currentLabel = text.toLowerCase();
+          continue;
+        }
 
-      const link = child.matches('a[href*="/chat/"]')
-        ? child
-        : child.querySelector('a[href*="/chat/"]');
-      if (link && currentLabel && !buckets.has(link)) {
-        buckets.set(link, currentLabel);
+        const link = child.matches('a[href*="/chat/"]')
+          ? child
+          : child.querySelector('a[href*="/chat/"]');
+        if (link && currentLabel && !buckets.has(link)) {
+          buckets.set(link, currentLabel);
+        }
       }
     }
 
@@ -1814,7 +1820,7 @@
       cctLog(
         "🔍 0 chats detected. Verifying active session before updating storage…",
       );
-      const activeOrgId = await fetchOrganizationId(true);
+      const activeOrgId = await fetchOrganizationId(false);
       if (!activeOrgId) {
         cctLog(
           "🚫 Active session lost or logged out. Scrape aborted to protect existing data.",
@@ -1937,6 +1943,9 @@
   function setupObserver() {
     observer = new MutationObserver((mutations) => {
       if (stopped) return;
+      if (window.__cctCheckPathname) {
+        window.__cctCheckPathname();
+      }
       if (mutationsMayAffectChats(mutations)) {
         scheduleScrape();
       }
@@ -1977,22 +1986,14 @@
       }, 500);
     });
 
-    const root =
-      document.querySelector("aside") ||
-      document.querySelector("nav") ||
-      document.querySelector("header") ||
-      document.body ||
-      document.documentElement;
-
-    accountObserver.observe(root, {
+    accountObserver.observe(document.body || document.documentElement, {
       childList: true,
       subtree: true,
     });
   }
 
   // RC-1 + RC-3 fix: watch SPA URL changes to detect logout and re-login
-  // without relying on page reloads.  Claude uses history.pushState for all
-  // navigation, so we intercept it to get zero-latency logout detection.
+  // without relying on page reloads.
   function setupNavigationWatcher() {
     let lastPathname = location.pathname;
 
@@ -2018,6 +2019,13 @@
       lastPathname = current;
     }
 
+    // Chromium Navigation API fires across MAIN -> ISOLATED worlds on SPA pushState/replaceState.
+    if (typeof window.navigation !== "undefined" && typeof window.navigation.addEventListener === "function") {
+      window.navigation.addEventListener("navigate", () => {
+        window.setTimeout(onNavigate, 0);
+      });
+    }
+
     // Intercept history.pushState and history.replaceState (used by Claude's SPA router).
     const origPushState = history.pushState.bind(history);
     history.pushState = function (...args) {
@@ -2033,6 +2041,9 @@
 
     // Also handle browser back/forward navigation.
     window.addEventListener("popstate", onNavigate);
+
+    // Fallback pathname check hooked into DOM mutations for non-Navigation-API environments.
+    window.__cctCheckPathname = onNavigate;
   }
 
   setupObserver();
