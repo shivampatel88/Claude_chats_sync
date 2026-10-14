@@ -1,6 +1,11 @@
 "use strict";
 
 const MAX_SYNC_CHUNK_BYTES = 7000; // 8192-byte limit with 1192-byte safety margin
+const _utf8Encoder = new TextEncoder();
+
+function utf8ByteLength(value, key = "") {
+  return _utf8Encoder.encode(JSON.stringify(value)).length + _utf8Encoder.encode(key).length;
+}
 
 function compactChat(chat) {
   // Truncate title to 200 chars to prevent individual chat objects from bloating chunks.
@@ -38,16 +43,15 @@ function expandChat(chat) {
 }
 
 function makeChatChunks(chats) {
-  // Use JSON.stringify().length — this matches Chrome's actual byte accounting for storage.
-  // TextEncoder gives UTF-8 bytes which diverges from JSON char count for non-ASCII content.
+  // Use UTF-8 byte length (+ key length) to strictly match Chromium's SettingsStorageQuotaEnforcer
   const chunks = [];
   let current = [];
 
   for (const chat of Object.values(chats || {})) {
     const compact = compactChat(chat);
     const next = [...current, compact];
-    const charLen = JSON.stringify(next).length;
-    if (charLen > MAX_SYNC_CHUNK_BYTES && current.length > 0) {
+    const byteLen = utf8ByteLength(next, "syncChats_00");
+    if (byteLen > MAX_SYNC_CHUNK_BYTES && current.length > 0) {
       chunks.push(current);
       current = [compact];
     } else {
