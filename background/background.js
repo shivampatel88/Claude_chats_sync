@@ -61,6 +61,8 @@ async function readSyncedData() {
   const chunkKeys = [];
   for (let i = 0; i < chunkCount; i++) {
     chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}`);
+    chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}_a`);
+    chunkKeys.push(`${SYNC_KEYS.chatPrefix}${i}_b`);
   }
   let chunkData = {};
   if (chunkKeys.length > 0) {
@@ -761,7 +763,7 @@ async function doSyncWrite(accounts, chats, deletedAccounts) {
   const safePayload = {};
   const overflowKeys = [];
   for (const [key, value] of Object.entries(payload)) {
-    const len = JSON.stringify(value).length;
+    const len = typeof utf8ByteLength === "function" ? utf8ByteLength(value, key) : JSON.stringify(value).length;
     if (len > CHROME_ITEM_LIMIT) {
       overflowKeys.push({ key, len });
     } else {
@@ -802,12 +804,18 @@ async function doSyncWrite(accounts, chats, deletedAccounts) {
 
   await chrome.storage.sync.set(safePayload);
 
-  // Remove stale chunk keys from a previous write that had more chunks
-  if (previousChunkCount > chunks.length) {
-    const staleKeys = [];
-    for (let i = chunks.length; i < previousChunkCount; i++) {
-      staleKeys.push(`${SYNC_KEYS.chatPrefix}${i}`);
+  // Remove stale chunk keys (including any _a/_b split keys not in safePayload)
+  const maxIdx = Math.max(previousChunkCount, chunks.length);
+  const staleKeys = [];
+  for (let i = 0; i < maxIdx; i++) {
+    for (const suffix of ["", "_a", "_b"]) {
+      const candidateKey = `${SYNC_KEYS.chatPrefix}${i}${suffix}`;
+      if (!(candidateKey in safePayload)) {
+        staleKeys.push(candidateKey);
+      }
     }
+  }
+  if (staleKeys.length > 0) {
     await chrome.storage.sync.remove(staleKeys);
   }
 
