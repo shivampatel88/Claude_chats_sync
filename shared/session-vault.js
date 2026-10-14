@@ -75,12 +75,14 @@
           name: c.name,
           value: c.value,
           domain: c.domain,
+          hostOnly: Boolean(c.hostOnly),
           path: c.path,
           secure: c.secure,
           httpOnly: c.httpOnly,
           sameSite: c.sameSite,
           expirationDate: c.expirationDate,
           storeId: c.storeId,
+          partitionKey: c.partitionKey,
         });
       }
     }
@@ -99,22 +101,29 @@
       try {
         const host = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
         const protocol = c.secure ? "https:" : "http:";
-        const url = `${protocol}//${host}${c.path || "/"}`;
+        const isHostOnly = Boolean(c.hostOnly) || c.name.startsWith("__Host-");
+        const cookiePath = c.name.startsWith("__Host-") ? "/" : (c.path || "/");
+        const url = `${protocol}//${host}${cookiePath}`;
         const details = {
           url,
           name: c.name,
           value: c.value,
-          domain: c.domain,
-          path: c.path || "/",
-          secure: c.secure !== false,
-          httpOnly: c.httpOnly !== false,
+          path: cookiePath,
+          secure: c.name.startsWith("__Host-") || c.name.startsWith("__Secure-") ? true : Boolean(c.secure),
+          httpOnly: Boolean(c.httpOnly),
           storeId: c.storeId,
         };
+        if (!isHostOnly && c.domain) {
+          details.domain = c.domain;
+        }
         if (c.sameSite && c.sameSite !== "unspecified") {
           details.sameSite = c.sameSite;
         }
         if (typeof c.expirationDate === "number") {
           details.expirationDate = c.expirationDate;
+        }
+        if (c.partitionKey) {
+          details.partitionKey = c.partitionKey;
         }
         await chrome.cookies.set(details);
         injected++;
