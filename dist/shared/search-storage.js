@@ -185,7 +185,7 @@
           if ((key.startsWith(STORAGE_KEY_PREFIX) || key === LEGACY_STORAGE_KEY) && typeof value === "object") {
             const index = value;
             let changed = false;
-            const newIndex = { ...index };
+            const newIndex = { ...updates[key] || index };
             for (const [k, record] of Object.entries(index)) {
               if (validStorageIds.has(k)) {
                 continue;
@@ -195,14 +195,13 @@
               if (canonicalSid) {
                 const newAcctId = canonicalSid.split(":")[0];
                 const targetKey = `${STORAGE_KEY_PREFIX}${newAcctId}`;
-                if (!updates[targetKey]) {
-                  updates[targetKey] = { ...items[targetKey] || {} };
-                }
-                updates[targetKey][canonicalSid] = {
+                const targetMap = targetKey === key ? newIndex : updates[targetKey] || { ...items[targetKey] || {} };
+                targetMap[canonicalSid] = {
                   ...record,
                   storageId: canonicalSid,
                   accountId: newAcctId
                 };
+                if (targetKey !== key) updates[targetKey] = targetMap;
                 delete newIndex[k];
                 changed = true;
               } else {
@@ -220,7 +219,7 @@
           if ((key.startsWith(EMBEDDING_KEY_PREFIX) || key === LEGACY_EMBEDDING_KEY) && typeof value === "object") {
             const index = value;
             let changed = false;
-            const newIndex = { ...index };
+            const newIndex = { ...updates[key] || index };
             for (const [k, vector] of Object.entries(index)) {
               if (validStorageIds.has(k)) {
                 continue;
@@ -230,10 +229,9 @@
               if (canonicalSid) {
                 const newAcctId = canonicalSid.split(":")[0];
                 const targetKey = `${EMBEDDING_KEY_PREFIX}${newAcctId}`;
-                if (!updates[targetKey]) {
-                  updates[targetKey] = { ...items[targetKey] || {} };
-                }
-                updates[targetKey][canonicalSid] = vector;
+                const targetMap = targetKey === key ? newIndex : updates[targetKey] || { ...items[targetKey] || {} };
+                targetMap[canonicalSid] = vector;
+                if (targetKey !== key) updates[targetKey] = targetMap;
                 delete newIndex[k];
                 changed = true;
               } else {
@@ -263,7 +261,7 @@
   }
   async function migrateLegacyIndexToPerAccount() {
     return new Promise((resolve) => {
-      chrome.storage.local.get([LEGACY_STORAGE_KEY, LEGACY_EMBEDDING_KEY], (items) => {
+      chrome.storage.local.get(null, (items) => {
         const updates = {};
         const removals = [];
         const legacyText = items[LEGACY_STORAGE_KEY];
@@ -277,7 +275,8 @@
           }
           for (const [acctId, entries] of Object.entries(byAccount)) {
             const key = `${STORAGE_KEY_PREFIX}${acctId}`;
-            updates[key] = { ...entries, ...updates[key] ?? {} };
+            const existing = items[key] && typeof items[key] === "object" ? items[key] : {};
+            updates[key] = { ...entries, ...existing };
           }
           removals.push(LEGACY_STORAGE_KEY);
         }
@@ -292,7 +291,8 @@
           }
           for (const [acctId, entries] of Object.entries(byAccount)) {
             const key = `${EMBEDDING_KEY_PREFIX}${acctId}`;
-            updates[key] = { ...entries, ...updates[key] ?? {} };
+            const existing = items[key] && typeof items[key] === "object" ? items[key] : {};
+            updates[key] = { ...entries, ...existing };
           }
           removals.push(LEGACY_EMBEDDING_KEY);
         }

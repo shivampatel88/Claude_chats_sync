@@ -273,7 +273,7 @@ export async function pruneOrphanedIndexEntries(
         if ((key.startsWith(STORAGE_KEY_PREFIX) || key === LEGACY_STORAGE_KEY) && typeof value === 'object') {
           const index = value as Record<string, ChatContentRecord>;
           let changed = false;
-          const newIndex = { ...index };
+          const newIndex: Record<string, ChatContentRecord> = { ...(updates[key] || index) };
 
           for (const [k, record] of Object.entries(index)) {
             if (validStorageIds.has(k)) {
@@ -286,14 +286,13 @@ export async function pruneOrphanedIndexEntries(
               // Re-key and migrate to canonical account
               const newAcctId = canonicalSid.split(':')[0];
               const targetKey = `${STORAGE_KEY_PREFIX}${newAcctId}`;
-              if (!updates[targetKey]) {
-                updates[targetKey] = { ...((items[targetKey] as Record<string, ChatContentRecord>) || {}) };
-              }
-              updates[targetKey][canonicalSid] = {
+              const targetMap = targetKey === key ? newIndex : (updates[targetKey] || { ...((items[targetKey] as Record<string, ChatContentRecord>) || {}) });
+              targetMap[canonicalSid] = {
                 ...record,
                 storageId: canonicalSid,
                 accountId: newAcctId,
               };
+              if (targetKey !== key) updates[targetKey] = targetMap;
               delete newIndex[k];
               changed = true;
             } else {
@@ -314,7 +313,7 @@ export async function pruneOrphanedIndexEntries(
         if ((key.startsWith(EMBEDDING_KEY_PREFIX) || key === LEGACY_EMBEDDING_KEY) && typeof value === 'object') {
           const index = value as Record<string, number[]>;
           let changed = false;
-          const newIndex = { ...index };
+          const newIndex: Record<string, number[]> = { ...(updates[key] || index) };
 
           for (const [k, vector] of Object.entries(index)) {
             if (validStorageIds.has(k)) {
@@ -327,10 +326,9 @@ export async function pruneOrphanedIndexEntries(
               // Re-key and migrate to canonical account
               const newAcctId = canonicalSid.split(':')[0];
               const targetKey = `${EMBEDDING_KEY_PREFIX}${newAcctId}`;
-              if (!updates[targetKey]) {
-                updates[targetKey] = { ...((items[targetKey] as Record<string, number[]>) || {}) };
-              }
-              updates[targetKey][canonicalSid] = vector;
+              const targetMap = targetKey === key ? newIndex : (updates[targetKey] || { ...((items[targetKey] as Record<string, number[]>) || {}) });
+              targetMap[canonicalSid] = vector;
+              if (targetKey !== key) updates[targetKey] = targetMap;
               delete newIndex[k];
               changed = true;
             } else {
@@ -374,7 +372,7 @@ export async function pruneOrphanedIndexEntries(
  */
 export async function migrateLegacyIndexToPerAccount(): Promise<void> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([LEGACY_STORAGE_KEY, LEGACY_EMBEDDING_KEY], (items) => {
+    chrome.storage.local.get(null, (items) => {
       const updates: Record<string, any> = {};
       const removals: string[] = [];
 
@@ -391,7 +389,8 @@ export async function migrateLegacyIndexToPerAccount(): Promise<void> {
         for (const [acctId, entries] of Object.entries(byAccount)) {
           const key = `${STORAGE_KEY_PREFIX}${acctId}`;
           // Merge with existing per‑account data; existing entries win on collision
-          updates[key] = { ...entries, ...(updates[key] ?? {}) };
+          const existing = (items[key] && typeof items[key] === 'object') ? items[key] : {};
+          updates[key] = { ...entries, ...existing };
         }
         removals.push(LEGACY_STORAGE_KEY);
       }
@@ -408,7 +407,8 @@ export async function migrateLegacyIndexToPerAccount(): Promise<void> {
         }
         for (const [acctId, entries] of Object.entries(byAccount)) {
           const key = `${EMBEDDING_KEY_PREFIX}${acctId}`;
-          updates[key] = { ...entries, ...(updates[key] ?? {}) };
+          const existing = (items[key] && typeof items[key] === 'object') ? items[key] : {};
+          updates[key] = { ...entries, ...existing };
         }
         removals.push(LEGACY_EMBEDDING_KEY);
       }
