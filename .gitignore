@@ -47,3 +47,6 @@ yarn-error.log*
 # ── Chrome extension packaged output ──────────────────────────────────
 *.crx
 *.pem
+
+# ── Analysis bundles ──────────────────────────────────────────────────
+codebase_analysis_bundle.txt
