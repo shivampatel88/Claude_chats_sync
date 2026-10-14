@@ -2564,8 +2564,11 @@ function bindEvents() {
     gearBtn.addEventListener("click", () => {
       const drawer = document.getElementById("semanticDrawer");
       if (drawer) {
-        drawer.style.display = drawer.style.display === "none" ? "" : "none";
-        if (drawer.style.display !== "none") _syncSemanticDrawerState();
+        const isOpen = drawer.style.display === "none";
+        drawer.style.display = isOpen ? "" : "none";
+        gearBtn.setAttribute("aria-expanded", String(isOpen));
+        gearBtn.classList.toggle("active", isOpen);
+        if (isOpen) _syncSemanticDrawerState();
       }
     });
   }
@@ -2575,6 +2578,10 @@ function bindEvents() {
     semanticCollapseBtn.addEventListener("click", () => {
       const drawer = document.getElementById("semanticDrawer");
       if (drawer) drawer.style.display = "none";
+      if (gearBtn) {
+        gearBtn.setAttribute("aria-expanded", "false");
+        gearBtn.classList.remove("active");
+      }
     });
   }
 
