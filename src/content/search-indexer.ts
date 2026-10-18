@@ -423,16 +423,26 @@ export class IndexingQueue {
                 // Persist the error so the popup can reflect it on next status poll
                 state.embeddingError = 'invalid-key';
               } else if (msg === 'RATE_LIMITED') {
-                cctWarn('Gemini rate limit hit — backing off for 15s before continuing');
-                // Move chatId back from doneChatIds to pendingChatIds so its embedding is retried
-                state.doneChatIds.pop();
-                state.pendingChatIds.unshift(chatId);
-                state.status = 'paused-ratelimited';
-                state.pausedAt = Date.now();
-                state.rateLimitCooldownMs = 15000;
-                await this.saveState(state);
-                this._scheduleNext(15000);
-                return;
+                state.retryCounts = state.retryCounts || {};
+                const embKey = `emb_${chatId}`;
+                const attempts = (state.retryCounts[embKey] || 0) + 1;
+                state.retryCounts[embKey] = attempts;
+                if (attempts <= 3) {
+                  cctWarn(`Gemini rate limit hit (attempt ${attempts}/3) — backing off for 15s`);
+                  // Move chatId back from doneChatIds to pendingChatIds so its embedding is retried
+                  state.doneChatIds.pop();
+                  state.pendingChatIds.unshift(chatId);
+                  state.status = 'paused-ratelimited';
+                  state.pausedAt = Date.now();
+                  state.rateLimitCooldownMs = 15000;
+                  await this.saveState(state);
+                  this._scheduleNext(15000);
+                  return;
+                } else {
+                  cctWarn(`Gemini rate limit persisted after ${attempts} attempts — disabling embeddings for this run`);
+                  this.embeddingError = 'rate-limited';
+                  state.embeddingError = 'rate-limited';
+                }
               } else {
                 cctWarn(`Embedding failed for ${chatId}:`, embErr);
                 // Non-fatal: content is already indexed; embedding is best-effort

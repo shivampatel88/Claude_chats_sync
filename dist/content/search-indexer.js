@@ -274,15 +274,25 @@
                   this.embeddingError = "invalid-key";
                   state.embeddingError = "invalid-key";
                 } else if (msg === "RATE_LIMITED") {
-                  cctWarn("Gemini rate limit hit \u2014 backing off for 15s before continuing");
-                  state.doneChatIds.pop();
-                  state.pendingChatIds.unshift(chatId);
-                  state.status = "paused-ratelimited";
-                  state.pausedAt = Date.now();
-                  state.rateLimitCooldownMs = 15e3;
-                  await this.saveState(state);
-                  this._scheduleNext(15e3);
-                  return;
+                  state.retryCounts = state.retryCounts || {};
+                  const embKey = `emb_${chatId}`;
+                  const attempts = (state.retryCounts[embKey] || 0) + 1;
+                  state.retryCounts[embKey] = attempts;
+                  if (attempts <= 3) {
+                    cctWarn(`Gemini rate limit hit (attempt ${attempts}/3) \u2014 backing off for 15s`);
+                    state.doneChatIds.pop();
+                    state.pendingChatIds.unshift(chatId);
+                    state.status = "paused-ratelimited";
+                    state.pausedAt = Date.now();
+                    state.rateLimitCooldownMs = 15e3;
+                    await this.saveState(state);
+                    this._scheduleNext(15e3);
+                    return;
+                  } else {
+                    cctWarn(`Gemini rate limit persisted after ${attempts} attempts \u2014 disabling embeddings for this run`);
+                    this.embeddingError = "rate-limited";
+                    state.embeddingError = "rate-limited";
+                  }
                 } else {
                   cctWarn(`Embedding failed for ${chatId}:`, embErr);
                 }

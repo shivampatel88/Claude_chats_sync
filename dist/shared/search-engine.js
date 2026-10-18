@@ -121,6 +121,7 @@
     }
     const canUseStoredFields = index && typeof index.getStoredFields === "function";
     let entries = {};
+    let entriesLoaded = false;
     const getRecord = async (storageId) => {
       if (canUseStoredFields) {
         try {
@@ -129,7 +130,8 @@
         } catch (_) {
         }
       }
-      if (Object.keys(entries).length === 0 && window.getAllIndexedEntries) {
+      if (!entriesLoaded && window.getAllIndexedEntries) {
+        entriesLoaded = true;
         entries = await window.getAllIndexedEntries();
       }
       return entries[storageId] || null;

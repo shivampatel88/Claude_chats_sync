@@ -253,6 +253,7 @@ export async function searchContentHybrid(
   // Prefer stored fields from MiniSearch directly to avoid reading full storage on every keystroke
   const canUseStoredFields = index && typeof index.getStoredFields === 'function';
   let entries: Record<string, any> = {};
+  let entriesLoaded = false;
 
   const getRecord = async (storageId: string) => {
     if (canUseStoredFields) {
@@ -261,7 +262,8 @@ export async function searchContentHybrid(
         if (stored) return stored;
       } catch (_) {}
     }
-    if (Object.keys(entries).length === 0 && (window as any).getAllIndexedEntries) {
+    if (!entriesLoaded && (window as any).getAllIndexedEntries) {
+      entriesLoaded = true;
       entries = (await (window as any).getAllIndexedEntries()) as Record<string, any>;
     }
     return entries[storageId] || null;
