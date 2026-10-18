@@ -722,7 +722,8 @@ async function updateVaultStatusUI(account) {
       if (hasSaved) {
         if (state.currentAccountId) {
           const curAcct = state.accounts[state.currentAccountId] || {};
-          await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curAcct.orgId);
+          const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
+          await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curOrgId);
         }
         const restoreRes = await window.CctVault.restoreSession(account.accountId);
         if (restoreRes && restoreRes.ok) {
@@ -1109,7 +1110,8 @@ function renderFilters() {
             if (window.CctVault && window.CctVault.restoreSession) {
               if (state.currentAccountId && window.CctVault.captureSession) {
                 const curAcct = state.accounts[state.currentAccountId] || {};
-                await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curAcct.orgId);
+                const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
+                await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curOrgId);
               }
               const res = await window.CctVault.restoreSession(accountId);
               if (res && res.ok) {
@@ -1184,6 +1186,7 @@ function renderFilters() {
 
     li.addEventListener("click", selectAccount);
     li.addEventListener("keydown", (e) => {
+      if (e.target !== li) return;
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         selectAccount(e);
@@ -1259,7 +1262,8 @@ async function openChat(chat) {
       // Snapshot current session before swapping so we never lose it
       if (state.currentAccountId) {
         const curAcct = state.accounts[state.currentAccountId] || {};
-        await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curAcct.orgId);
+        const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
+        await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curOrgId);
       }
       // Restore target account's session
       const restoreRes = await window.CctVault.restoreSession(chat.accountId);

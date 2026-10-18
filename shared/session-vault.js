@@ -237,6 +237,7 @@
     for (const [accId, s] of Object.entries(vault)) {
       meta[accId] = {
         accountId: s.accountId,
+        orgId: s.orgId || null,
         email: s.email || null,
         savedAt: s.savedAt || 0,
         expired: Boolean(s.expired),
