@@ -95,7 +95,6 @@ async function readSyncedData() {
 
 let syncInProgress = false;
 const syncQueue = [];
-let vaultSwapMutex = Promise.resolve();
 const VAULT_RECOVERY_KEY = "vaultSwapRecoveryJournal";
 
 // Fail-safe startup recovery: if the SW crashed mid-swap, restore original cookies immediately.
@@ -119,7 +118,8 @@ async function recoverInterruptedVaultSwap() {
     bgWarn("⚠️ Failed to recover interrupted vault swap:", err);
   }
 }
-recoverInterruptedVaultSwap();
+// Seed the mutex with the startup recovery promise so all vault operations wait for recovery.
+let vaultSwapMutex = recoverInterruptedVaultSwap();
 
 function withVaultLock(fn) {
   const next = vaultSwapMutex.then(fn, fn);
@@ -137,25 +137,27 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 // bgLog/bgWarn are silenced when developer mode is OFF (devMode key not set in chrome.storage.local).
 // Toggle dev mode by clicking the popup title 5 times.
 const BGT = "[CCT-BG]";
-let bgLog  = (...a) => console.log(BGT, ...a);
-let bgWarn = (...a) => console.warn(BGT, ...a);
+const _noop = () => {};
+let bgLog  = _noop;
+let bgWarn = _noop;
 
-// Read devMode from storage once on startup; silence logging if not set.
+// Default to silent; enable logging only when devMode is confirmed true.
 (async () => {
   try {
     const result = await chrome.storage.local.get(["devMode"]);
-    if (!result.devMode) {
-      const noop = () => {};
-      bgLog  = noop;
-      bgWarn = noop;
+    if (result.devMode) {
+      bgLog  = (...a) => console.log(BGT, ...a);
+      bgWarn = (...a) => console.warn(BGT, ...a);
     }
-  } catch (_) {
-    // Storage unavailable — default to silent.
-    const noop = () => {};
-    bgLog  = noop;
-    bgWarn = noop;
-  }
+  } catch (_) {}
 })();
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes.devMode) {
+    bgLog  = changes.devMode.newValue ? (...a) => console.log(BGT, ...a) : _noop;
+    bgWarn = changes.devMode.newValue ? (...a) => console.warn(BGT, ...a) : _noop;
+  }
+});
 
 // ─── declarativeNetRequest: login_hint injection ──────────────────────────────
 // When the user switches accounts, we register a dynamic DNR rule that appends
@@ -192,6 +194,7 @@ async function setLoginHintRule(email) {
           condition: {
             // Matches both the v2 and legacy Google OAuth endpoints.
             urlFilter: "||accounts.google.com/o/oauth2/",
+            excludedInitiatorDomains: ["accounts.google.com"],
             resourceTypes: ["main_frame", "sub_frame"],
           },
         },
@@ -230,7 +233,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
   // Restrict privileged messages if originating from accounts.google.com
-  const senderUrl = _sender?.tab?.url || _sender?.url || "";
+  const senderUrl = _sender?.url || _sender?.tab?.url || "";
   if (senderUrl.startsWith("https://accounts.google.com")) {
     if (message.type !== "CLEAR_LOGIN_HINT") {
       sendResponse({ ok: false, error: "Forbidden message from this origin" });
@@ -321,7 +324,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // VAULT_CAPTURE_SESSION: captures active session into vault
   if (message.type === "VAULT_CAPTURE_SESSION") {
     const { accountId, email, orgId } = message;
-    (async () => {
+    withVaultLock(async () => {
       try {
         if (self.CctVault && accountId) {
           const res = await self.CctVault.captureSession(accountId, email, orgId);
@@ -332,14 +335,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } catch (err) {
         sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
       }
-    })();
+    });
     return true;
   }
 
   // VAULT_RESTORE_SESSION: restores saved session into browser cookie jar
   if (message.type === "VAULT_RESTORE_SESSION") {
     const { accountId } = message;
-    (async () => {
+    withVaultLock(async () => {
       try {
         if (self.CctVault && accountId) {
           const res = await self.CctVault.restoreSession(accountId);
@@ -350,7 +353,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } catch (err) {
         sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
       }
-    })();
+    });
     return true;
   }
 
