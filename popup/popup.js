@@ -597,6 +597,36 @@ function renderStatus() {
   }
 }
 
+async function captureSessionViaSw(accountId, email, orgId) {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "VAULT_CAPTURE_SESSION",
+      accountId,
+      email,
+      orgId,
+    });
+    if (res && res.ok !== undefined) return res;
+  } catch (_) {}
+  if (window.CctVault && window.CctVault.captureSession) {
+    return await window.CctVault.captureSession(accountId, email, orgId);
+  }
+  return { ok: false, error: "Vault unavailable" };
+}
+
+async function restoreSessionViaSw(accountId) {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "VAULT_RESTORE_SESSION",
+      accountId,
+    });
+    if (res && res.ok !== undefined) return res;
+  } catch (_) {}
+  if (window.CctVault && window.CctVault.restoreSession) {
+    return await window.CctVault.restoreSession(accountId);
+  }
+  return { ok: false, error: "Vault unavailable" };
+}
+
 async function updateVaultStatusUI(account) {
   const vaultContainer = document.getElementById("vaultStatusContainer");
   if (!vaultContainer || !account) return;
@@ -723,9 +753,9 @@ async function updateVaultStatusUI(account) {
         if (state.currentAccountId) {
           const curAcct = state.accounts[state.currentAccountId] || {};
           const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
-          await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curOrgId);
+          await captureSessionViaSw(state.currentAccountId, curAcct.email, curOrgId);
         }
-        const restoreRes = await window.CctVault.restoreSession(account.accountId);
+        const restoreRes = await restoreSessionViaSw(account.accountId);
         if (restoreRes && restoreRes.ok) {
           state.currentAccountId = account.accountId;
           await storageSet({
@@ -1107,14 +1137,13 @@ function renderFilters() {
           e.stopPropagation();
           switchBtn.disabled = true;
           try {
-            if (window.CctVault && window.CctVault.restoreSession) {
-              if (state.currentAccountId && window.CctVault.captureSession) {
-                const curAcct = state.accounts[state.currentAccountId] || {};
-                const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
-                await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curOrgId);
-              }
-              const res = await window.CctVault.restoreSession(accountId);
-              if (res && res.ok) {
+            if (state.currentAccountId) {
+              const curAcct = state.accounts[state.currentAccountId] || {};
+              const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
+              await captureSessionViaSw(state.currentAccountId, curAcct.email, curOrgId);
+            }
+            const res = await restoreSessionViaSw(accountId);
+            if (res && res.ok) {
                 state.currentAccountId = accountId;
                 await storageSet({ currentAccountId: accountId, pendingOpen: null });
                 const tabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
@@ -1126,7 +1155,6 @@ function renderFilters() {
               } else {
                 alert("Could not switch session: " + (res?.error || "Unknown error"));
               }
-            }
           } catch (switchErr) {
             alert("Switch error: " + (switchErr && switchErr.message ? switchErr.message : String(switchErr)));
           } finally {
@@ -1263,10 +1291,10 @@ async function openChat(chat) {
       if (state.currentAccountId) {
         const curAcct = state.accounts[state.currentAccountId] || {};
         const curOrgId = state.vaultMeta?.[state.currentAccountId]?.orgId || null;
-        await window.CctVault.captureSession(state.currentAccountId, curAcct.email, curOrgId);
+        await captureSessionViaSw(state.currentAccountId, curAcct.email, curOrgId);
       }
       // Restore target account's session
-      const restoreRes = await window.CctVault.restoreSession(chat.accountId);
+      const restoreRes = await restoreSessionViaSw(chat.accountId);
       if (restoreRes && restoreRes.ok) {
         state.currentAccountId = chat.accountId;
         await storageSet({
