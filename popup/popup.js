@@ -1257,12 +1257,28 @@ function renderFilters() {
       if (triggerDot) triggerDot.style.backgroundColor = activeAcct.color;
     }
   }
+  updateDynamicAccent();
+}
+
+function updateDynamicAccent() {
+  let resolvedColor = "#d97706";
+  if (state.activeAccountId && state.activeAccountId !== "all" && state.accounts[state.activeAccountId]?.color) {
+    resolvedColor = state.accounts[state.activeAccountId].color;
+  } else if (state.currentAccountId && state.accounts[state.currentAccountId]?.color) {
+    resolvedColor = state.accounts[state.currentAccountId].color;
+  }
+  document.documentElement.style.setProperty("--acct-accent", resolvedColor);
 }
 
 function renderCurrentAccount() {
   const currentAccount = state.accounts[state.currentAccountId];
-  document.getElementById("currentAccountName").textContent =
-    currentAccountDisplay(currentAccount);
+  const nameEl = document.getElementById("currentAccountName");
+  if (nameEl) {
+    nameEl.textContent = currentAccountDisplay(currentAccount);
+  }
+  const curColor = currentAccount?.color || "#22c55e";
+  document.documentElement.style.setProperty("--current-acct-color", curColor);
+  updateDynamicAccent();
 }
 
 function canOpenWithoutMismatchWarning(chat) {
@@ -1899,6 +1915,7 @@ async function updateQuotaDisplay() {
 }
 
 function render() {
+  updateDynamicAccent();
   renderStatus();
   renderCurrentAccount();
   renderFilters();
